@@ -155,6 +155,14 @@ Interactive grading demo:
 - Show that the CI works and runs your tests.
 
 If you go this route, you need to do feature 5 before feature 2.
+  
+## AI use policy
+
+You are free to use AI agents however you want for this project.  However, **you
+are responsible for the code you submit, and your knowledge of it**.  If you
+cannot explain the code and the ideas behind it well enough that you can easily
+manipulate them during code reviews, interactive grading, or the exam you will
+fail this assignment.
 
 ## Grading
 

@@ -1,0 +1,7 @@
+**/target/
+site/client.js
+*.wasm
+*.gz
+*.zstd
+*.log
+.DS_Store

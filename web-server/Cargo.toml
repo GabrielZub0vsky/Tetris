@@ -1,0 +1,22 @@
+[package]
+name = "web-server"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[dependencies]
+axum.workspace = true
+axum-login.workspace = true
+lightyear_netcode.workspace = true
+minijinja.workspace = true
+password-auth.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-sessions.workspace = true
+tower-sessions-sqlx-store.workspace = true
+
+[lints]
+workspace = true

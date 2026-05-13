@@ -1,0 +1,19 @@
+[package]
+name = "common"
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bevy = { workspace = true }
+lightyear = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+
+[features]
+test = ["bevy/bevy_ci_testing"]
+
+[lints]
+workspace = true

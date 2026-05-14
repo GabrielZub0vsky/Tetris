@@ -1,0 +1,21 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_log", "bevy_state"] }
+clap = { version = "4.5.60", features = ["derive"] }
+common = { version = "0.1.0", path = "../common" }
+lightyear = { workspace = true, features = ["server", "crossbeam"] }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+test = ["bevy/bevy_ci_testing"]
+basic_tests = []
+default = ["basic_tests"]
+
+[lints]
+workspace = true

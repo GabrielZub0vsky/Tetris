@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Players{% endblock %}
+{% block content %}
+<h1>Players</h1>
+{% if users %}
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Joined</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td><a href="/users/{{ user.id }}">{{ user.username }}</a></td>
+        <td style="color:#666">{{ user.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p style="color:#666">No players yet.</p>
+{% endif %}
+{% endblock %}

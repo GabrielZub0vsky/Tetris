@@ -130,7 +130,11 @@ pub async fn post_signup(
         );
     }
 
-    let hash = generate_hash(&form.password);
+    let password = form.password.clone();
+    let hash = match tokio::task::spawn_blocking(move || generate_hash(&password)).await {
+        Ok(h) => h,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
     match db::create_user(&state.pool, &username, &hash).await {
         Ok(user_id) => {
             let _ = db::touch_user(&state.pool, user_id).await;

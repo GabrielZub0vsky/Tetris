@@ -56,7 +56,13 @@ impl AuthnBackend for Backend {
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
         let user = db::get_user_by_username(&self.pool, &creds.username).await?;
-        Ok(user.filter(|u| verify_password(&creds.password, &u.password_hash).is_ok()))
+        let Some(user) = user else { return Ok(None) };
+        let password = creds.password.clone();
+        let hash = user.password_hash.clone();
+        let ok = tokio::task::spawn_blocking(move || verify_password(&password, &hash).is_ok())
+            .await
+            .unwrap_or(false);
+        Ok(if ok { Some(user) } else { None })
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {

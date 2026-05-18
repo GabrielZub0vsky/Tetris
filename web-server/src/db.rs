@@ -156,10 +156,7 @@ pub async fn get_user_games(pool: &SqlitePool, user_id: i64) -> sqlx::Result<Vec
 }
 
 /// Count wins/losses/draws for a user.
-pub async fn get_user_stats(
-    pool: &SqlitePool,
-    user_id: i64,
-) -> sqlx::Result<(i64, i64, i64)> {
+pub async fn get_user_stats(pool: &SqlitePool, user_id: i64) -> sqlx::Result<(i64, i64, i64)> {
     let wins: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM game_participants WHERE user_id = ? AND verdict = 'Won'",
     )

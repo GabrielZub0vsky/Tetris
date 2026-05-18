@@ -85,7 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/users/{id}", get(routes::get_user_detail))
         .route("/online", get(routes::get_online))
         .route("/logout", post(routes::post_logout))
-        .route("/lobbies", get(routes::get_lobbies).post(routes::post_create_lobby))
+        .route(
+            "/lobbies",
+            get(routes::get_lobbies).post(routes::post_create_lobby),
+        )
         .route("/lobbies/{id}", get(routes::get_lobby_detail))
         .route("/lobbies/{id}/join", post(routes::post_join_lobby))
         .route("/lobbies/{id}/leave", post(routes::post_leave_lobby))

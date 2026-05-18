@@ -46,28 +46,23 @@ pub async fn seed_if_empty(pool: &SqlitePool) -> sqlx::Result<()> {
     ];
 
     for (i, j, verdict_i, verdict_j) in games {
-        let game_id: i64 =
-            sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
-                .fetch_one(pool)
-                .await?;
+        let game_id: i64 = sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
+            .fetch_one(pool)
+            .await?;
 
-        sqlx::query(
-            "INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, ?)",
-        )
-        .bind(game_id)
-        .bind(user_ids[*i])
-        .bind(*verdict_i)
-        .execute(pool)
-        .await?;
+        sqlx::query("INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, ?)")
+            .bind(game_id)
+            .bind(user_ids[*i])
+            .bind(*verdict_i)
+            .execute(pool)
+            .await?;
 
-        sqlx::query(
-            "INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, ?)",
-        )
-        .bind(game_id)
-        .bind(user_ids[*j])
-        .bind(*verdict_j)
-        .execute(pool)
-        .await?;
+        sqlx::query("INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, ?)")
+            .bind(game_id)
+            .bind(user_ids[*j])
+            .bind(*verdict_j)
+            .execute(pool)
+            .await?;
     }
 
     Ok(())

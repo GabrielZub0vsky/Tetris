@@ -2,15 +2,18 @@
 
 use std::sync::Arc;
 
-use axum::{Router, routing::{get, post}};
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use axum_login::{AuthManagerLayerBuilder, login_required};
 use password_auth::generate_hash;
 use sqlx::SqlitePool;
+use tower::util::ServiceExt;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::SqliteStore;
-use tower::util::ServiceExt;
-use axum::http::{Request, StatusCode};
-use axum::body::Body;
 
 use crate::{auth, build_template_env, db, routes::AppState};
 
@@ -41,8 +44,14 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
 
     let public = Router::new()
-        .route("/login", get(crate::routes::get_login).post(crate::routes::post_login))
-        .route("/signup", get(crate::routes::get_signup).post(crate::routes::post_signup));
+        .route(
+            "/login",
+            get(crate::routes::get_login).post(crate::routes::post_login),
+        )
+        .route(
+            "/signup",
+            get(crate::routes::get_signup).post(crate::routes::post_signup),
+        );
 
     let app = Router::new()
         .merge(protected)
@@ -183,11 +192,10 @@ async fn test_game_history_recorded() {
     let id1 = db::create_user(&pool, "player1", &hash).await.unwrap();
     let id2 = db::create_user(&pool, "player2", &hash).await.unwrap();
 
-    let game_id: i64 =
-        sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let game_id: i64 = sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     sqlx::query("INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, ?)")
         .bind(game_id)

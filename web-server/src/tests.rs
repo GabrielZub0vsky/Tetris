@@ -29,6 +29,8 @@ async fn build_test_app() -> (Router, SqlitePool) {
     let state = AppState {
         pool: pool.clone(),
         env: Arc::new(env),
+        processes: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        next_port: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(1338)),
     };
 
     let protected = Router::new()

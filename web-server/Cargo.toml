@@ -13,6 +13,7 @@ minijinja.workspace = true
 password-auth.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

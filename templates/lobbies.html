@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Lobbies{% endblock %}
+{% block content %}
+<h1>Lobbies</h1>
+
+{% if error %}
+  <p class="error" style="margin-bottom:1rem">{{ error }}</p>
+{% endif %}
+
+{% if current_user %}
+  {% if user_lobby_id %}
+    <p style="color:#888;margin-bottom:1rem">
+      You are in <a href="/lobbies/{{ user_lobby_id }}">lobby #{{ user_lobby_id }}</a>.
+    </p>
+  {% else %}
+    <div class="card" style="margin-bottom:1.5rem">
+      <h2>Create Lobby</h2>
+      <form method="post" action="/lobbies">
+        <label for="max_players">Players (1–3)</label>
+        <input type="number" id="max_players" name="max_players" min="1" max="3" value="1" required>
+        <button type="submit">Create</button>
+      </form>
+    </div>
+  {% endif %}
+{% endif %}
+
+{% if lobbies %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Host</th>
+        <th>Players</th>
+        <th>Port</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lobby in lobbies %}
+      <tr>
+        <td><a href="/lobbies/{{ lobby.id }}">#{{ lobby.id }}</a></td>
+        <td>{{ lobby.host_username }}</td>
+        <td>{{ lobby.member_count }}/{{ lobby.max_players }}</td>
+        <td style="color:#7eb8f7">{{ lobby.port }}</td>
+        <td>
+          {% if lobby.status == "waiting" %}
+            <span style="color:#fa5">waiting</span>
+          {% elif lobby.status == "running" %}
+            <span style="color:#5f5">running</span>
+          {% else %}
+            <span style="color:#888">{{ lobby.status }}</span>
+          {% endif %}
+        </td>
+        <td style="color:#666">{{ lobby.created_at }}</td>
+        <td>
+          {% if current_user and not user_lobby_id and lobby.status == "waiting" and lobby.member_count < lobby.max_players %}
+            <form method="post" action="/lobbies/{{ lobby.id }}/join" style="display:inline;max-width:none;margin:0">
+              <button type="submit" style="padding:0.25rem 0.75rem;font-size:0.85rem">Join</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p style="color:#666">No active lobbies.</p>
+{% endif %}
+{% endblock %}

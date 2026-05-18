@@ -1,6 +1,9 @@
-//! Web server entry point: user auth, profiles, and game history.
+//! Web server entry point: user auth, profiles, lobbies, and game history.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU16;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -22,6 +25,12 @@ mod tests;
 
 use routes::AppState;
 
+/// Starting port for dynamically allocated game servers.
+const BASE_GAME_PORT: u16 = 1338;
+
+/// Inactivity timeout in minutes before a lobby is killed.
+const LOBBY_TIMEOUT_MINUTES: i64 = 1;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = SqlitePoolOptions::new()
@@ -31,6 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     db::init_schema(&pool).await?;
     seed::seed_if_empty(&pool).await?;
+
+    // Kill any lobbies left over from a previous run.
+    cleanup_orphaned_lobbies(&pool).await;
 
     let session_store = SqliteStore::new(pool.clone());
     session_store.migrate().await?;
@@ -42,16 +54,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let env = build_template_env();
 
+    let processes = Arc::new(Mutex::new(HashMap::new()));
+    let next_port = Arc::new(AtomicU16::new(BASE_GAME_PORT));
+
     let state = AppState {
-        pool,
+        pool: pool.clone(),
         env: Arc::new(env),
+        processes: processes.clone(),
+        next_port: next_port.clone(),
     };
+
+    // Background task: kill stale lobbies every 30 s.
+    let cleanup_pool = pool.clone();
+    let cleanup_procs = processes.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Ok(stale) = db::get_stale_lobbies(&cleanup_pool, LOBBY_TIMEOUT_MINUTES).await {
+                for lobby in stale {
+                    routes::kill_lobby_process(&cleanup_procs, lobby.id);
+                    let _ = db::delete_lobby(&cleanup_pool, lobby.id).await;
+                }
+            }
+        }
+    });
 
     let protected = Router::new()
         .route("/users", get(routes::get_users))
         .route("/users/{id}", get(routes::get_user_detail))
         .route("/online", get(routes::get_online))
         .route("/logout", post(routes::post_logout))
+        .route("/lobbies", get(routes::get_lobbies).post(routes::post_create_lobby))
+        .route("/lobbies/{id}", get(routes::get_lobby_detail))
+        .route("/lobbies/{id}/join", post(routes::post_join_lobby))
+        .route("/lobbies/{id}/leave", post(routes::post_leave_lobby))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
 
     let public = Router::new()
@@ -71,7 +108,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn build_template_env() -> Environment<'static> {
+/// On startup, delete any lobbies still marked active from a previous run.
+/// Their game-server processes are already dead (orphaned on web-server exit).
+async fn cleanup_orphaned_lobbies(pool: &sqlx::SqlitePool) {
+    if let Ok(active) = db::get_all_active_lobbies(pool).await {
+        for lobby in active {
+            // Try to kill by stored PID in case the OS reused none of them.
+            if let Some(pid) = lobby.pid {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+            }
+            let _ = db::delete_lobby(pool, lobby.id).await;
+        }
+    }
+}
+
+/// Build the MiniJinja template environment with all embedded templates.
+pub fn build_template_env() -> Environment<'static> {
     let mut env = Environment::new();
 
     env.add_template_owned(
@@ -102,6 +156,16 @@ fn build_template_env() -> Environment<'static> {
     env.add_template_owned(
         "online.html",
         include_str!("../../templates/online.html").to_string(),
+    )
+    .unwrap();
+    env.add_template_owned(
+        "lobbies.html",
+        include_str!("../../templates/lobbies.html").to_string(),
+    )
+    .unwrap();
+    env.add_template_owned(
+        "lobby_detail.html",
+        include_str!("../../templates/lobby_detail.html").to_string(),
     )
     .unwrap();
 

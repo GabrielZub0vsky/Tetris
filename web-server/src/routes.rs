@@ -10,7 +10,10 @@ use minijinja::Environment;
 use password_auth::generate_hash;
 use serde::Deserialize;
 use sqlx::SqlitePool;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::process::Child;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     auth::{AuthSession, Credentials},
@@ -22,6 +25,19 @@ use crate::{
 pub struct AppState {
     pub pool: SqlitePool,
     pub env: Arc<Environment<'static>>,
+    /// Handles for spawned game-server child processes, keyed by lobby id.
+    pub processes: Arc<Mutex<HashMap<i64, Child>>>,
+    /// Next port to allocate for a game server.
+    pub next_port: Arc<AtomicU16>,
+}
+
+/// Kill and remove the game-server process for a lobby, if one exists.
+pub fn kill_lobby_process(processes: &Mutex<HashMap<i64, Child>>, lobby_id: i64) {
+    if let Ok(mut map) = processes.lock()
+        && let Some(mut child) = map.remove(&lobby_id)
+    {
+        let _ = child.kill();
+    }
 }
 
 /// Render a template, returning 500 on failure.
@@ -228,11 +244,11 @@ pub async fn get_user_detail(
 
 pub async fn get_online(auth_session: AuthSession, State(state): State<AppState>) -> Response {
     let current_user = auth_session.user.as_ref().map(|u| {
-        let _ = {
+        {
             let pool = state.pool.clone();
             let id = u.id;
             tokio::spawn(async move { db::touch_user(&pool, id).await });
-        };
+        }
         u.username.clone()
     });
 
@@ -250,5 +266,257 @@ pub async fn get_online(auth_session: AuthSession, State(state): State<AppState>
             },
         ),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+// ── Lobbies ──────────────────────────────────────────────────────────────────
+
+/// Form for creating a new lobby.
+#[derive(Deserialize)]
+pub struct CreateLobbyForm {
+    pub max_players: i64,
+}
+
+/// List all active lobbies.
+pub async fn get_lobbies(auth_session: AuthSession, State(state): State<AppState>) -> Response {
+    let current_user = auth_session.user.as_ref().map(|u| u.username.clone());
+    let user_lobby_id = match &auth_session.user {
+        Some(u) => db::get_user_current_lobby(&state.pool, u.id)
+            .await
+            .ok()
+            .flatten()
+            .map(|l| l.id),
+        None => None,
+    };
+    match db::list_active_lobbies(&state.pool).await {
+        Ok(lobbies) => render(
+            &state.env,
+            "lobbies.html",
+            minijinja::context! {
+                lobbies => lobbies.iter().map(|l| minijinja::context! {
+                    id => l.id,
+                    host_username => l.host_username.clone(),
+                    max_players => l.max_players,
+                    port => l.port,
+                    status => l.status.clone(),
+                    created_at => l.created_at.clone(),
+                    member_count => l.member_count,
+                }).collect::<Vec<_>>(),
+                current_user => current_user,
+                user_lobby_id => user_lobby_id,
+                error => "",
+            },
+        ),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Create a new lobby and spawn its game server.
+pub async fn post_create_lobby(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Form(form): Form<CreateLobbyForm>,
+) -> Response {
+    let user = match &auth_session.user {
+        Some(u) => u.clone(),
+        None => return Redirect::to("/login").into_response(),
+    };
+
+    let current_user = user.username.clone();
+
+    if let Ok(Some(_)) = db::get_user_current_lobby(&state.pool, user.id).await {
+        return render_lobbies_error(&state, &current_user, "Already in a lobby.").await;
+    }
+
+    if !(1..=3).contains(&form.max_players) {
+        return render_lobbies_error(&state, &current_user, "Lobby size must be 1–3.").await;
+    }
+
+    let port = state.next_port.fetch_add(1, Ordering::Relaxed) as i64;
+
+    let lobby_id = match db::create_lobby(&state.pool, user.id, form.max_players, port).await {
+        Ok(id) => id,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let _ = db::add_lobby_member(&state.pool, lobby_id, user.id).await;
+
+    spawn_game_server(&state, lobby_id, port, form.max_players).await;
+
+    Redirect::to(&format!("/lobbies/{lobby_id}")).into_response()
+}
+
+/// Show lobby detail page.
+pub async fn get_lobby_detail(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(lobby_id): Path<i64>,
+) -> Response {
+    let current_user = auth_session.user.as_ref().map(|u| u.username.clone());
+    let user_id = auth_session.user.as_ref().map(|u| u.id);
+
+    let lobby = match db::get_lobby(&state.pool, lobby_id).await {
+        Ok(Some(l)) => l,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let members = db::get_lobby_members(&state.pool, lobby_id)
+        .await
+        .unwrap_or_default();
+
+    let user_in_lobby = user_id
+        .map(|uid| members.iter().any(|m| m.id == uid))
+        .unwrap_or(false);
+
+    let is_full = members.len() as i64 >= lobby.max_players;
+
+    render(
+        &state.env,
+        "lobby_detail.html",
+        minijinja::context! {
+            lobby => minijinja::context! {
+                id => lobby.id,
+                max_players => lobby.max_players,
+                port => lobby.port,
+                status => lobby.status,
+                created_at => lobby.created_at,
+            },
+            members => members.iter().map(|m| minijinja::context! {
+                id => m.id,
+                username => m.username.clone(),
+            }).collect::<Vec<_>>(),
+            current_user => current_user,
+            user_in_lobby => user_in_lobby,
+            is_full => is_full,
+        },
+    )
+}
+
+/// Join an existing lobby.
+pub async fn post_join_lobby(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(lobby_id): Path<i64>,
+) -> Response {
+    let user = match &auth_session.user {
+        Some(u) => u.clone(),
+        None => return Redirect::to("/login").into_response(),
+    };
+
+    if let Ok(Some(_)) = db::get_user_current_lobby(&state.pool, user.id).await {
+        return Redirect::to("/lobbies").into_response();
+    }
+
+    let lobby = match db::get_lobby(&state.pool, lobby_id).await {
+        Ok(Some(l)) => l,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    if lobby.status != "waiting" {
+        return Redirect::to("/lobbies").into_response();
+    }
+
+    let count = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(i64::MAX);
+    if count >= lobby.max_players {
+        return Redirect::to("/lobbies").into_response();
+    }
+
+    let _ = db::add_lobby_member(&state.pool, lobby_id, user.id).await;
+    let _ = db::touch_lobby(&state.pool, lobby_id).await;
+
+    let new_count = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(0);
+    if new_count >= lobby.max_players {
+        let _ = db::set_lobby_status(&state.pool, lobby_id, "running").await;
+    }
+
+    Redirect::to(&format!("/lobbies/{lobby_id}")).into_response()
+}
+
+/// Leave (or close) a lobby.
+pub async fn post_leave_lobby(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(lobby_id): Path<i64>,
+) -> Response {
+    let user = match &auth_session.user {
+        Some(u) => u.clone(),
+        None => return Redirect::to("/login").into_response(),
+    };
+
+    let lobby = match db::get_lobby(&state.pool, lobby_id).await {
+        Ok(Some(l)) => l,
+        _ => return Redirect::to("/lobbies").into_response(),
+    };
+
+    let _ = db::remove_lobby_member(&state.pool, lobby_id, user.id).await;
+    let _ = db::touch_lobby(&state.pool, lobby_id).await;
+
+    let remaining = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(0);
+
+    if remaining == 0 || lobby.host_user_id == user.id {
+        kill_lobby_process(&state.processes, lobby_id);
+        let _ = db::delete_lobby(&state.pool, lobby_id).await;
+    }
+
+    Redirect::to("/lobbies").into_response()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async fn render_lobbies_error(state: &AppState, current_user: &str, error: &str) -> Response {
+    let lobbies = db::list_active_lobbies(&state.pool)
+        .await
+        .unwrap_or_default();
+    render(
+        &state.env,
+        "lobbies.html",
+        minijinja::context! {
+            lobbies => lobbies.iter().map(|l| minijinja::context! {
+                id => l.id,
+                host_username => l.host_username.clone(),
+                max_players => l.max_players,
+                port => l.port,
+                status => l.status.clone(),
+                created_at => l.created_at.clone(),
+                member_count => l.member_count,
+            }).collect::<Vec<_>>(),
+            current_user => current_user,
+            user_lobby_id => Option::<i64>::None,
+            error => error,
+        },
+    )
+}
+
+/// Spawn a game-server child process for the given lobby and store its handle.
+pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_players: i64) {
+    let config_json = format!(
+        r#"{{"bag":"RandomSeed","animate_title":false,"server_addr":"127.0.0.1","server_port":{port},"replication_interval_ms":16,"send_garbage":false,"expected_players":{max_players}}}"#
+    );
+    let config_path = format!("/tmp/lobby_{lobby_id}.json");
+    if std::fs::write(&config_path, &config_json).is_err() {
+        return;
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("./target/debug/server")
+            .arg("--config")
+            .arg(&config_path)
+            .spawn()
+    })
+    .await;
+
+    if let Ok(Ok(child)) = result {
+        let pid = child.id() as i64;
+        state.processes.lock().unwrap().insert(lobby_id, child);
+        let pool = state.pool.clone();
+        tokio::spawn(async move {
+            let _ = db::set_lobby_pid(&pool, lobby_id, pid).await;
+        });
     }
 }

@@ -2,6 +2,40 @@
 
 use sqlx::{SqlitePool, sqlite::SqliteQueryResult};
 
+/// A lobby waiting for or currently running a game.
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct Lobby {
+    pub id: i64,
+    pub host_user_id: i64,
+    pub max_players: i64,
+    pub port: i64,
+    /// OS PID of the spawned game server process, if any.
+    pub pid: Option<i64>,
+    pub status: String,
+    pub created_at: String,
+    pub last_activity: String,
+}
+
+/// Lobby entry for the lobby list view (includes member count and host name).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LobbyEntry {
+    pub id: i64,
+    pub host_username: String,
+    pub max_players: i64,
+    pub port: i64,
+    pub status: String,
+    pub created_at: String,
+    pub member_count: i64,
+}
+
+/// A lobby member (user id + username) for the detail view.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LobbyMember {
+    pub id: i64,
+    pub username: String,
+}
+
 /// A registered user.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
@@ -73,7 +107,194 @@ pub async fn init_schema(pool: &SqlitePool) -> sqlx::Result<()> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS lobbies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_user_id INTEGER NOT NULL REFERENCES users(id),
+            max_players INTEGER NOT NULL CHECK(max_players BETWEEN 1 AND 3),
+            port INTEGER NOT NULL UNIQUE,
+            pid INTEGER,
+            status TEXT NOT NULL DEFAULT 'waiting'
+                CHECK(status IN ('waiting', 'running', 'finished')),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_activity TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS lobby_members (
+            lobby_id INTEGER NOT NULL REFERENCES lobbies(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            PRIMARY KEY (lobby_id, user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
+}
+
+/// Create a lobby; returns the new lobby id.
+pub async fn create_lobby(
+    pool: &SqlitePool,
+    host_user_id: i64,
+    max_players: i64,
+    port: i64,
+) -> sqlx::Result<i64> {
+    let r: SqliteQueryResult =
+        sqlx::query("INSERT INTO lobbies (host_user_id, max_players, port) VALUES (?, ?, ?)")
+            .bind(host_user_id)
+            .bind(max_players)
+            .bind(port)
+            .execute(pool)
+            .await?;
+    Ok(r.last_insert_rowid())
+}
+
+/// Store the OS PID for a lobby's game server process.
+pub async fn set_lobby_pid(pool: &SqlitePool, lobby_id: i64, pid: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE lobbies SET pid = ? WHERE id = ?")
+        .bind(pid)
+        .bind(lobby_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Add a user to a lobby's member list.
+pub async fn add_lobby_member(pool: &SqlitePool, lobby_id: i64, user_id: i64) -> sqlx::Result<()> {
+    sqlx::query("INSERT OR IGNORE INTO lobby_members (lobby_id, user_id) VALUES (?, ?)")
+        .bind(lobby_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Remove a user from a lobby.
+pub async fn remove_lobby_member(
+    pool: &SqlitePool,
+    lobby_id: i64,
+    user_id: i64,
+) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM lobby_members WHERE lobby_id = ? AND user_id = ?")
+        .bind(lobby_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Fetch a lobby by id.
+pub async fn get_lobby(pool: &SqlitePool, lobby_id: i64) -> sqlx::Result<Option<Lobby>> {
+    sqlx::query_as::<_, Lobby>("SELECT * FROM lobbies WHERE id = ?")
+        .bind(lobby_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// List all lobbies that are waiting or running, with member counts.
+pub async fn list_active_lobbies(pool: &SqlitePool) -> sqlx::Result<Vec<LobbyEntry>> {
+    sqlx::query_as::<_, LobbyEntry>(
+        "SELECT l.id, u.username AS host_username, l.max_players, l.port,
+                l.status, l.created_at,
+                COUNT(lm.user_id) AS member_count
+         FROM lobbies l
+         JOIN users u ON u.id = l.host_user_id
+         LEFT JOIN lobby_members lm ON lm.lobby_id = l.id
+         WHERE l.status IN ('waiting', 'running')
+         GROUP BY l.id
+         ORDER BY l.created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Return the active lobby the given user is currently in, if any.
+pub async fn get_user_current_lobby(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> sqlx::Result<Option<Lobby>> {
+    sqlx::query_as::<_, Lobby>(
+        "SELECT l.* FROM lobbies l
+         JOIN lobby_members lm ON lm.lobby_id = l.id
+         WHERE lm.user_id = ? AND l.status IN ('waiting', 'running')
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Count current members in a lobby.
+pub async fn get_lobby_member_count(pool: &SqlitePool, lobby_id: i64) -> sqlx::Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM lobby_members WHERE lobby_id = ?")
+        .bind(lobby_id)
+        .fetch_one(pool)
+        .await
+}
+
+/// Fetch all members (id + username) for a lobby.
+pub async fn get_lobby_members(pool: &SqlitePool, lobby_id: i64) -> sqlx::Result<Vec<LobbyMember>> {
+    sqlx::query_as::<_, LobbyMember>(
+        "SELECT u.id, u.username FROM lobby_members lm
+         JOIN users u ON u.id = lm.user_id
+         WHERE lm.lobby_id = ?",
+    )
+    .bind(lobby_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Delete a lobby (cascades to lobby_members).
+pub async fn delete_lobby(pool: &SqlitePool, lobby_id: i64) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM lobbies WHERE id = ?")
+        .bind(lobby_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Update a lobby's status field.
+pub async fn set_lobby_status(pool: &SqlitePool, lobby_id: i64, status: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE lobbies SET status = ? WHERE id = ?")
+        .bind(status)
+        .bind(lobby_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Refresh a lobby's last_activity timestamp to now.
+pub async fn touch_lobby(pool: &SqlitePool, lobby_id: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE lobbies SET last_activity = datetime('now') WHERE id = ?")
+        .bind(lobby_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Return lobbies that have had no activity for more than `minutes` minutes.
+pub async fn get_stale_lobbies(pool: &SqlitePool, minutes: i64) -> sqlx::Result<Vec<Lobby>> {
+    sqlx::query_as::<_, Lobby>(
+        "SELECT * FROM lobbies
+         WHERE status IN ('waiting', 'running')
+           AND last_activity <= datetime('now', printf('-%d minutes', ?))",
+    )
+    .bind(minutes)
+    .fetch_all(pool)
+    .await
+}
+
+/// Return all active lobbies (used for startup cleanup).
+pub async fn get_all_active_lobbies(pool: &SqlitePool) -> sqlx::Result<Vec<Lobby>> {
+    sqlx::query_as::<_, Lobby>(
+        "SELECT * FROM lobbies WHERE status IN ('waiting', 'running')",
+    )
+    .fetch_all(pool)
+    .await
 }
 
 /// Fetch a user by username.

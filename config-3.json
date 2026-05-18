@@ -1,0 +1,9 @@
+{
+    "bag":"RandomSeed",
+    "animate_title":true,
+    "server_addr":"127.0.0.1",
+    "server_port":1337,
+    "replication_interval_ms":16,
+    "expected_players":3,
+    "send_garbage":true
+}

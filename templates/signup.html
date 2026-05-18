@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Sign Up{% endblock %}
+{% block content %}
+<h1>Sign Up</h1>
+<div class="card">
+  <form method="post" action="/signup">
+    <label>Username</label>
+    <input type="text" name="username" required autofocus>
+    <label>Password</label>
+    <input type="password" name="password" required>
+    <label>Confirm Password</label>
+    <input type="password" name="confirm_password" required>
+    {% if error %}
+      <span class="error">{{ error }}</span>
+    {% endif %}
+    <button type="submit">Create account</button>
+  </form>
+  <p style="margin-top:1rem;color:#666;font-size:0.85rem">
+    Already have an account? <a href="/login">Log in</a>
+  </p>
+</div>
+{% endblock %}

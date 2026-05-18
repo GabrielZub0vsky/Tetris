@@ -12,11 +12,16 @@ lightyear_netcode.workspace = true
 minijinja.workspace = true
 password-auth.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tower-sessions.workspace = true
 tower-sessions-sqlx-store.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+reqwest = { workspace = true, features = ["json", "form", "cookies"] }
 
 [lints]
 workspace = true

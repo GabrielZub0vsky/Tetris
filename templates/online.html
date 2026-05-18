@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Online Now{% endblock %}
+{% block content %}
+<h1>Online Now</h1>
+<p style="color:#666;font-size:0.85rem;margin-bottom:1.25rem">
+  Players active in the last 5 minutes.
+</p>
+{% if online_users %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Username</th>
+        <th>Last Seen</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in online_users %}
+      <tr>
+        <td style="width:24px"><span class="online-dot"></span></td>
+        <td><a href="/users/{{ user.id }}">{{ user.username }}</a></td>
+        <td style="color:#666">{{ user.last_seen_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p style="color:#666">Nobody online right now.</p>
+{% endif %}
+{% endblock %}

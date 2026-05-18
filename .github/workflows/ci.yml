@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy (client)
+        run: cd client && cargo clippy -- -D warnings
+
+      - name: Clippy (server)
+        run: cd server && cargo clippy -- -D warnings
+
+      - name: Run server tests
+        run: chmod +x test-server.sh && ./test-server.sh
+
+      - name: Run web-server tests
+        run: cargo test -p web-server

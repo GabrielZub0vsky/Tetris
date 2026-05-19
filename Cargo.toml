@@ -1,6 +1,5 @@
 [workspace]
 resolver = "3"
-# TODO: add your milestone 3 projects to this list
 members = ["web-server", "client", "common", "server"]
 
 # configuration that is shared among dependencies

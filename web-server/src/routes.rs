@@ -495,11 +495,22 @@ async fn render_lobbies_error(state: &AppState, current_user: &str, error: &str)
 
 /// Spawn a game-server child process for the given lobby and store its handle.
 pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_players: i64) {
-    let config_json = format!(
-        r#"{{"bag":"RandomSeed","animate_title":false,"server_addr":"127.0.0.1","server_port":{port},"replication_interval_ms":16,"send_garbage":false,"expected_players":{max_players}}}"#
-    );
+    let base_config = match max_players {
+        2 => "config-2.json",
+        3 => "config-3.json",
+        _ => "config.json",
+    };
+    let config_str = match std::fs::read_to_string(base_config) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut config: serde_json::Value = match serde_json::from_str(&config_str) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    config["server_port"] = serde_json::json!(port);
     let config_path = format!("/tmp/lobby_{lobby_id}.json");
-    if std::fs::write(&config_path, &config_json).is_err() {
+    if std::fs::write(&config_path, config.to_string()).is_err() {
         return;
     }
 

@@ -1,30 +1,62 @@
-name: CI
+name: Rust
 
 on:
   push:
+    branches: ["main", "ci"]
   pull_request:
+    branches: ["main", "ci"]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust components
-        run: rustup component add rustfmt clippy
+      - name: Log in to ghcr with read only access
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.CLASSROOM_GHCR_TOKEN }}
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-      - name: Clippy (client)
-        run: cd client && cargo clippy -- -D warnings
+      - name: Pull ci environment
+        run: docker pull ghcr.io/usf272spring26/test-box-blox-wasm:0.0.2
 
-      - name: Clippy (server)
-        run: cd server && cargo clippy -- -D warnings
+      - name: Start container
+        run: |
+          docker run -d \
+            --name ci \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            ghcr.io/usf272spring26/test-box-blox-wasm:0.0.2 \
+            tail -f /dev/null
 
-      - name: Run server tests
-        run: chmod +x test-server.sh && ./test-server.sh
+      - name: Run fmt check
+        run: docker exec -w /workspace ci cargo fmt --check
 
-      - name: Run web-server tests
-        run: cargo test -p web-server
+      - name: Run Clippy - client
+        run: docker exec -w /workspace/client ci cargo clippy -- -D warnings
+
+      - name: Run Clippy - server
+        run: docker exec -w /workspace/server ci cargo clippy -- -D warnings
+
+      - name: Run Clippy - web-server
+        run: docker exec -w /workspace/web-server ci cargo clippy -- -D warnings
+
+      - name: Run tests
+        run: docker exec -w /workspace ci cargo test -p server -p web-server -p common

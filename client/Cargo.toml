@@ -20,6 +20,9 @@ wasm-bindgen = "0.2.115"
 wasm-bindgen-futures = "0.4.64"
 web-sys = { version = "0.3.91", features = [ "Window", "Request", "RequestInit", "RequestMode", "Response", "console" ] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [features]
 test = ["bevy/bevy_ci_testing"]
 

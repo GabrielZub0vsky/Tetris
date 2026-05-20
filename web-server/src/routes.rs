@@ -228,11 +228,11 @@ pub async fn get_user_detail(
 
 pub async fn get_online(auth_session: AuthSession, State(state): State<AppState>) -> Response {
     let current_user = auth_session.user.as_ref().map(|u| {
-        let _ = {
+        {
             let pool = state.pool.clone();
             let id = u.id;
             tokio::spawn(async move { db::touch_user(&pool, id).await });
-        };
+        }
         u.username.clone()
     });
 

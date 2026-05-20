@@ -85,7 +85,10 @@ pub fn build_app(app: &mut App) {
             OnEnter(ServerState::Running),
             (spawn_client_game_states, record::reset_game_tracking),
         )
-        .add_systems(OnExit(ServerState::Running), record::write_game_result_to_db)
+        .add_systems(
+            OnExit(ServerState::Running),
+            record::write_game_result_to_db,
+        )
         .add_observer(handle_user_input)
         .add_observer(swap_hold)
         .add_observer(update_score)

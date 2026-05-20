@@ -33,10 +33,7 @@ pub fn write_game_result_to_db(
         }
     };
 
-    if let Err(e) = conn.execute(
-        "INSERT INTO games (played_at) VALUES (datetime('now'))",
-        [],
-    ) {
+    if let Err(e) = conn.execute("INSERT INTO games (played_at) VALUES (datetime('now'))", []) {
         error!("Failed to insert game record: {e}");
         return;
     }

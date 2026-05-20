@@ -1,7 +1,7 @@
 //! The main server binary
 
-use ::server::net::ServerPlugin;
 use ::server::ServerDbConfig;
+use ::server::net::ServerPlugin;
 use bevy::prelude::*;
 use clap::Parser;
 use common::FIXED_TIMESTEP_HZ;
@@ -31,11 +31,20 @@ fn main() {
             .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
             .unwrap_or_default();
         let db_path = val["db_path"].as_str().unwrap_or("").to_string();
-        (cfg, ServerDbConfig { db_path, player_ids })
+        (
+            cfg,
+            ServerDbConfig {
+                db_path,
+                player_ids,
+            },
+        )
     } else {
         (
             GameConfig::default(),
-            ServerDbConfig { db_path: String::new(), player_ids: vec![] },
+            ServerDbConfig {
+                db_path: String::new(),
+                player_ids: vec![],
+            },
         )
     };
 

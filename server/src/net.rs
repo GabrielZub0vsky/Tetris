@@ -116,6 +116,7 @@ pub fn handle_connected(
     mut commands: Commands,
     state: Res<State<ServerState>>,
     mut next_state: ResMut<NextState<ServerState>>,
+    mut client_order: ResMut<crate::ClientOrder>,
 ) {
     if *state.get() == ServerState::Running {
         warn!(
@@ -125,6 +126,8 @@ pub fn handle_connected(
         commands.entity(trigger.entity).insert(ToDrop);
         return;
     }
+
+    client_order.order.push(trigger.entity);
 
     let count = peer_ids.iter().count();
     info!(

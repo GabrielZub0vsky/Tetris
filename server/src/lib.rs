@@ -12,7 +12,7 @@ use bevy::app::App;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::query::{QueryData, QueryFilter};
 use bevy::ecs::system::Query;
-use bevy::prelude::States;
+use bevy::prelude::{Resource, States};
 use bevy::state::app::StatesPlugin;
 use common::*;
 use lightyear::prelude::Lifetime::SessionBased;
@@ -22,6 +22,7 @@ use crate::score::{send_garbage, update_score};
 
 pub mod game_logic;
 pub mod net;
+pub mod record;
 pub mod score;
 
 #[cfg(test)]
@@ -35,6 +36,27 @@ pub enum ServerState {
     Running,
 }
 
+/// DB path and ordered player IDs from the web server config.
+#[derive(Resource)]
+pub struct ServerDbConfig {
+    /// Path to tetris.db
+    pub db_path: String,
+    /// DB user IDs in lobby join order
+    pub player_ids: Vec<i64>,
+}
+
+/// Tracks the order clients connected this game round.
+#[derive(Resource, Default)]
+pub struct ClientOrder {
+    pub order: Vec<Entity>,
+}
+
+/// Maps client entity to their game verdict.
+#[derive(Resource, Default)]
+pub struct GameOutcomes {
+    pub outcomes: HashMap<Entity, String>,
+}
+
 /// Inject the systems and plugins for this game into the app.
 pub fn build_app(app: &mut App) {
     use bevy::prelude::*;
@@ -44,6 +66,8 @@ pub fn build_app(app: &mut App) {
 
     app.add_plugins(StatesPlugin)
         .init_state::<ServerState>()
+        .init_resource::<ClientOrder>()
+        .init_resource::<GameOutcomes>()
         .add_systems(
             FixedUpdate,
             (
@@ -57,7 +81,11 @@ pub fn build_app(app: &mut App) {
                 .in_set(Game)
                 .run_if(in_state(ServerState::Running)),
         )
-        .add_systems(OnEnter(ServerState::Running), spawn_client_game_states)
+        .add_systems(
+            OnEnter(ServerState::Running),
+            (spawn_client_game_states, record::reset_game_tracking),
+        )
+        .add_systems(OnExit(ServerState::Running), record::write_game_result_to_db)
         .add_observer(handle_user_input)
         .add_observer(swap_hold)
         .add_observer(update_score)

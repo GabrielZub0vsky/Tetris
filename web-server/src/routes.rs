@@ -509,6 +509,14 @@ pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_p
         Err(_) => return,
     };
     config["server_port"] = serde_json::json!(port);
+
+    let members = db::get_lobby_members(&state.pool, lobby_id)
+        .await
+        .unwrap_or_default();
+    let player_ids: Vec<i64> = members.iter().map(|m| m.id).collect();
+    config["player_ids"] = serde_json::json!(player_ids);
+    config["db_path"] = serde_json::json!("tetris.db");
+
     let config_path = format!("/tmp/lobby_{lobby_id}.json");
     if std::fs::write(&config_path, config.to_string()).is_err() {
         return;

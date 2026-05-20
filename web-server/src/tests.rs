@@ -593,10 +593,62 @@ async fn test_users_page_sort_by_wins_works() {
         .unwrap()
         .unwrap()
         .id;
-    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
-    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
-    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
-    insert_game(&pool, few, many, "Won", "Lost", 10, 5, None, Some(2.0), 5.0, 2.0).await;
+    insert_game(
+        &pool,
+        many,
+        few,
+        "Won",
+        "Lost",
+        50,
+        10,
+        None,
+        Some(5.0),
+        10.0,
+        5.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        many,
+        few,
+        "Won",
+        "Lost",
+        50,
+        10,
+        None,
+        Some(5.0),
+        10.0,
+        5.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        many,
+        few,
+        "Won",
+        "Lost",
+        50,
+        10,
+        None,
+        Some(5.0),
+        10.0,
+        5.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        few,
+        many,
+        "Won",
+        "Lost",
+        10,
+        5,
+        None,
+        Some(2.0),
+        5.0,
+        2.0,
+    )
+    .await;
 
     let response = app
         .clone()
@@ -642,9 +694,35 @@ async fn test_users_page_sort_by_fastest_elim_ascending() {
         .unwrap()
         .id;
     // slow KO at 30s
-    insert_game(&pool, slow, fast, "Won", "Lost", 10, 5, None, Some(30.0), 30.0, 30.0).await;
+    insert_game(
+        &pool,
+        slow,
+        fast,
+        "Won",
+        "Lost",
+        10,
+        5,
+        None,
+        Some(30.0),
+        30.0,
+        30.0,
+    )
+    .await;
     // fast KO at 2s
-    insert_game(&pool, fast, slow, "Won", "Lost", 10, 5, None, Some(2.0), 2.0, 2.0).await;
+    insert_game(
+        &pool,
+        fast,
+        slow,
+        "Won",
+        "Lost",
+        10,
+        5,
+        None,
+        Some(2.0),
+        2.0,
+        2.0,
+    )
+    .await;
 
     let response = app
         .clone()
@@ -688,14 +766,8 @@ fn extract_session_cookie(response: &axum::http::Response<Body>) -> String {
 }
 
 /// Helper: sign up a user and return the response with set-cookie.
-async fn login_as(
-    app: &Router,
-    username: &str,
-    password: &str,
-) -> axum::http::Response<Body> {
-    let body = format!(
-        "username={username}&password={password}&confirm_password={password}",
-    );
+async fn login_as(app: &Router, username: &str, password: &str) -> axum::http::Response<Body> {
+    let body = format!("username={username}&password={password}&confirm_password={password}",);
     app.clone()
         .oneshot(
             Request::builder()

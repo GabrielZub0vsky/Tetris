@@ -6,11 +6,11 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use std::cmp::Ordering as CmpOrd;
 use minijinja::Environment;
 use password_auth::generate_hash;
 use serde::Deserialize;
 use sqlx::SqlitePool;
+use std::cmp::Ordering as CmpOrd;
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -254,14 +254,16 @@ fn sort_entries(entries: &mut [(db::User, db::CareerStats)], key: &str) {
                 .unwrap_or(CmpOrd::Equal)
         }),
         "highest_score" => entries.sort_by(|a, b| b.1.highest_score.cmp(&a.1.highest_score)),
-        "fastest_elim" => entries.sort_by(|a, b| {
-            match (a.1.fastest_elim_seconds, b.1.fastest_elim_seconds) {
-                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(CmpOrd::Equal),
-                (Some(_), None) => CmpOrd::Less,
-                (None, Some(_)) => CmpOrd::Greater,
-                _ => CmpOrd::Equal,
-            }
-        }),
+        "fastest_elim" => {
+            entries.sort_by(
+                |a, b| match (a.1.fastest_elim_seconds, b.1.fastest_elim_seconds) {
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(CmpOrd::Equal),
+                    (Some(_), None) => CmpOrd::Less,
+                    (None, Some(_)) => CmpOrd::Greater,
+                    _ => CmpOrd::Equal,
+                },
+            )
+        }
         "total_play" => entries.sort_by(|a, b| {
             b.1.total_play_seconds
                 .partial_cmp(&a.1.total_play_seconds)

@@ -2,10 +2,11 @@
 
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use std::cmp::Ordering as CmpOrd;
 use minijinja::Environment;
 use password_auth::generate_hash;
 use serde::Deserialize;
@@ -177,32 +178,53 @@ pub async fn post_logout(mut auth_session: AuthSession) -> Response {
 
 // ── User list ────────────────────────────────────────────────────────────────
 
-pub async fn get_users(auth_session: AuthSession, State(state): State<AppState>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct UsersQuery {
+    pub sort: Option<String>,
+}
+
+pub async fn get_users(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Query(q): Query<UsersQuery>,
+) -> Response {
     let current_user = auth_session.user.as_ref().map(|u| u.username.clone());
     let users = match db::list_users(&state.pool).await {
         Ok(u) => u,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let mut rows = Vec::with_capacity(users.len());
-    for u in &users {
+    let mut entries: Vec<(db::User, db::CareerStats)> = Vec::with_capacity(users.len());
+    for u in users {
         let stats = db::get_user_career_stats(&state.pool, u.id)
             .await
             .unwrap_or_default();
-        rows.push(minijinja::context! {
-            id => u.id,
-            username => u.username.clone(),
-            created_at => u.created_at.clone(),
-            wins => stats.wins,
-            losses => stats.losses,
-            win_pct => format!("{:.1}", stats.win_pct),
-            highest_score => stats.highest_score,
-            fastest_elim => stats.fastest_elim_seconds
-                .map(|s| format!("{:.1}s", s))
-                .unwrap_or_else(|| "—".to_string()),
-            total_play => format_duration(stats.total_play_seconds),
-        });
+        entries.push((u, stats));
     }
+
+    let sort = q.sort.as_deref().unwrap_or("wins");
+    sort_entries(&mut entries, sort);
+
+    let rows: Vec<_> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, (u, s))| {
+            minijinja::context! {
+                rank => i + 1,
+                id => u.id,
+                username => u.username.clone(),
+                created_at => u.created_at.clone(),
+                wins => s.wins,
+                losses => s.losses,
+                win_pct => format!("{:.1}", s.win_pct),
+                highest_score => s.highest_score,
+                fastest_elim => s.fastest_elim_seconds
+                    .map(|x| format!("{:.1}s", x))
+                    .unwrap_or_else(|| "—".to_string()),
+                total_play => format_duration(s.total_play_seconds),
+            }
+        })
+        .collect();
 
     render(
         &state.env,
@@ -210,8 +232,44 @@ pub async fn get_users(auth_session: AuthSession, State(state): State<AppState>)
         minijinja::context! {
             users => rows,
             current_user => current_user,
+            sort => sort,
         },
     )
+}
+
+/// Sort users by the requested leaderboard key.
+/// Numeric metrics sort descending (bigger = better) except `fastest_elim`
+/// which sorts ascending with None pushed to the end.
+fn sort_entries(entries: &mut [(db::User, db::CareerStats)], key: &str) {
+    match key {
+        "username" => entries.sort_by(|a, b| {
+            a.0.username
+                .to_lowercase()
+                .cmp(&b.0.username.to_lowercase())
+        }),
+        "losses" => entries.sort_by(|a, b| b.1.losses.cmp(&a.1.losses)),
+        "win_pct" => entries.sort_by(|a, b| {
+            b.1.win_pct
+                .partial_cmp(&a.1.win_pct)
+                .unwrap_or(CmpOrd::Equal)
+        }),
+        "highest_score" => entries.sort_by(|a, b| b.1.highest_score.cmp(&a.1.highest_score)),
+        "fastest_elim" => entries.sort_by(|a, b| {
+            match (a.1.fastest_elim_seconds, b.1.fastest_elim_seconds) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(CmpOrd::Equal),
+                (Some(_), None) => CmpOrd::Less,
+                (None, Some(_)) => CmpOrd::Greater,
+                _ => CmpOrd::Equal,
+            }
+        }),
+        "total_play" => entries.sort_by(|a, b| {
+            b.1.total_play_seconds
+                .partial_cmp(&a.1.total_play_seconds)
+                .unwrap_or(CmpOrd::Equal)
+        }),
+        // Default: wins desc.
+        _ => entries.sort_by(|a, b| b.1.wins.cmp(&a.1.wins)),
+    }
 }
 
 fn format_duration(seconds: f64) -> String {

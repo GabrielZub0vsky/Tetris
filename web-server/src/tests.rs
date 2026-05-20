@@ -575,6 +575,141 @@ async fn test_set_lobby_status_persists() {
 }
 
 #[tokio::test]
+async fn test_users_page_sort_by_wins_works() {
+    let (app, pool) = build_test_app().await;
+
+    // Sign up via route so we get a logged-in session cookie.
+    let response = login_as(&app, "manywins", "password").await;
+    let cookie = extract_session_cookie(&response);
+    let _ = login_as(&app, "fewwins", "password").await;
+
+    let many = db::get_user_by_username(&pool, "manywins")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let few = db::get_user_by_username(&pool, "fewwins")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
+    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
+    insert_game(&pool, many, few, "Won", "Lost", 50, 10, None, Some(5.0), 10.0, 5.0).await;
+    insert_game(&pool, few, many, "Won", "Lost", 10, 5, None, Some(2.0), 5.0, 2.0).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/users?sort=wins")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    // manywins (3 wins) appears before fewwins (1 win) in the HTML.
+    let pos_many = html.find("manywins").expect("manywins missing");
+    let pos_few = html.find("fewwins").expect("fewwins missing");
+    assert!(
+        pos_many < pos_few,
+        "manywins should appear before fewwins when sorted by wins desc"
+    );
+}
+
+#[tokio::test]
+async fn test_users_page_sort_by_fastest_elim_ascending() {
+    let (app, pool) = build_test_app().await;
+
+    let response = login_as(&app, "fastko", "password").await;
+    let cookie = extract_session_cookie(&response);
+    let _ = login_as(&app, "slowko", "password").await;
+
+    let fast = db::get_user_by_username(&pool, "fastko")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let slow = db::get_user_by_username(&pool, "slowko")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    // slow KO at 30s
+    insert_game(&pool, slow, fast, "Won", "Lost", 10, 5, None, Some(30.0), 30.0, 30.0).await;
+    // fast KO at 2s
+    insert_game(&pool, fast, slow, "Won", "Lost", 10, 5, None, Some(2.0), 2.0, 2.0).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/users?sort=fastest_elim")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    let pos_fast = html.find("fastko").unwrap();
+    let pos_slow = html.find("slowko").unwrap();
+    assert!(
+        pos_fast < pos_slow,
+        "fastko (KO 2s) should sort before slowko (KO 30s) when sort=fastest_elim"
+    );
+}
+
+/// Pull the session cookie value (`id=...`) out of all Set-Cookie headers.
+fn extract_session_cookie(response: &axum::http::Response<Body>) -> String {
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or(s).to_string())
+        .collect();
+    assert!(
+        !cookies.is_empty(),
+        "signup did not set any cookies; status={:?} headers={:?}",
+        response.status(),
+        response.headers(),
+    );
+    cookies.join("; ")
+}
+
+/// Helper: sign up a user and return the response with set-cookie.
+async fn login_as(
+    app: &Router,
+    username: &str,
+    password: &str,
+) -> axum::http::Response<Body> {
+    let body = format!(
+        "username={username}&password={password}&confirm_password={password}",
+    );
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/signup")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
 async fn test_root_redirects_when_not_logged_in() {
     let (app, _pool) = build_test_app().await;
 

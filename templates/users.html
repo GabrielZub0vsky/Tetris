@@ -1,24 +1,34 @@
 {% extends "base.html" %}
-{% block title %}Players{% endblock %}
+{% block title %}Leaderboard{% endblock %}
 {% block content %}
-<h1>Players</h1>
+<h1>Leaderboard</h1>
+<p style="color:#666;font-size:0.85rem;margin-bottom:1rem">Click any column header to sort.</p>
 {% if users %}
+  {% macro sort_th(key, label) %}
+    <th>
+      <a href="/users?sort={{ key }}" style="text-decoration:none;color:inherit">
+        {{ label }}{% if sort == key %} ↓{% endif %}
+      </a>
+    </th>
+  {% endmacro %}
   <table>
     <thead>
       <tr>
-        <th>Username</th>
+        <th>#</th>
+        {{ sort_th("username", "Username") }}
         <th>Joined</th>
-        <th>W</th>
-        <th>L</th>
-        <th>Win %</th>
-        <th>High Score</th>
-        <th>Fastest KO</th>
-        <th>Total Play Time</th>
+        {{ sort_th("wins", "Wins") }}
+        {{ sort_th("losses", "Losses") }}
+        {{ sort_th("win_pct", "Win %") }}
+        {{ sort_th("highest_score", "High Score") }}
+        {{ sort_th("fastest_elim", "Fastest KO") }}
+        {{ sort_th("total_play", "Total Play Time") }}
       </tr>
     </thead>
     <tbody>
       {% for user in users %}
       <tr>
+        <td style="color:#666">{{ user.rank }}</td>
         <td><a href="/users/{{ user.id }}">{{ user.username }}</a></td>
         <td style="color:#666">{{ user.created_at }}</td>
         <td><span class="badge-won">{{ user.wins }}</span></td>

@@ -307,9 +307,48 @@ async fn test_career_stats_win_pct() {
     let b = db::create_user(&pool, "b", &hash).await.unwrap();
 
     // a wins 2, loses 1, draws 1 → 50%
-    insert_game(&pool, a, b, "Won", "Lost", 100, 50, None, Some(30.0), 60.0, 30.0).await;
-    insert_game(&pool, a, b, "Won", "Lost", 200, 80, None, Some(40.0), 70.0, 40.0).await;
-    insert_game(&pool, a, b, "Lost", "Won", 30, 150, Some(20.0), None, 20.0, 60.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        100,
+        50,
+        None,
+        Some(30.0),
+        60.0,
+        30.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        200,
+        80,
+        None,
+        Some(40.0),
+        70.0,
+        40.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Lost",
+        "Won",
+        30,
+        150,
+        Some(20.0),
+        None,
+        20.0,
+        60.0,
+    )
+    .await;
     insert_game(&pool, a, b, "Draw", "Draw", 90, 90, None, None, 90.0, 90.0).await;
 
     let stats = db::get_user_career_stats(&pool, a).await.unwrap();
@@ -326,9 +365,48 @@ async fn test_career_stats_highest_score() {
     let a = db::create_user(&pool, "a", &hash).await.unwrap();
     let b = db::create_user(&pool, "b", &hash).await.unwrap();
 
-    insert_game(&pool, a, b, "Won", "Lost", 500, 50, None, Some(10.0), 30.0, 10.0).await;
-    insert_game(&pool, a, b, "Lost", "Won", 1234, 50, Some(5.0), None, 5.0, 20.0).await;
-    insert_game(&pool, a, b, "Won", "Lost", 100, 50, None, Some(10.0), 15.0, 10.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        500,
+        50,
+        None,
+        Some(10.0),
+        30.0,
+        10.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Lost",
+        "Won",
+        1234,
+        50,
+        Some(5.0),
+        None,
+        5.0,
+        20.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        100,
+        50,
+        None,
+        Some(10.0),
+        15.0,
+        10.0,
+    )
+    .await;
 
     let stats = db::get_user_career_stats(&pool, a).await.unwrap();
     assert_eq!(stats.highest_score, 1234);
@@ -342,10 +420,49 @@ async fn test_career_stats_fastest_elim_only_counts_wins() {
     let b = db::create_user(&pool, "b", &hash).await.unwrap();
 
     // a wins → opponent eliminated at 30s, then a wins again → opp at 12s.
-    insert_game(&pool, a, b, "Won", "Lost", 100, 50, None, Some(30.0), 30.0, 30.0).await;
-    insert_game(&pool, a, b, "Won", "Lost", 100, 50, None, Some(12.0), 12.0, 12.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        100,
+        50,
+        None,
+        Some(30.0),
+        30.0,
+        30.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        100,
+        50,
+        None,
+        Some(12.0),
+        12.0,
+        12.0,
+    )
+    .await;
     // Game a LOST: opp elim at 3s — must NOT count for a's fastest KO.
-    insert_game(&pool, a, b, "Lost", "Won", 5, 50, Some(3.0), None, 3.0, 25.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Lost",
+        "Won",
+        5,
+        50,
+        Some(3.0),
+        None,
+        3.0,
+        25.0,
+    )
+    .await;
 
     let stats = db::get_user_career_stats(&pool, a).await.unwrap();
     assert_eq!(stats.fastest_elim_seconds, Some(12.0));
@@ -358,7 +475,20 @@ async fn test_career_stats_fastest_elim_none_when_no_wins() {
     let a = db::create_user(&pool, "a", &hash).await.unwrap();
     let b = db::create_user(&pool, "b", &hash).await.unwrap();
 
-    insert_game(&pool, a, b, "Lost", "Won", 10, 100, Some(5.0), None, 5.0, 30.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Lost",
+        "Won",
+        10,
+        100,
+        Some(5.0),
+        None,
+        5.0,
+        30.0,
+    )
+    .await;
 
     let stats = db::get_user_career_stats(&pool, a).await.unwrap();
     assert!(stats.fastest_elim_seconds.is_none());
@@ -371,8 +501,34 @@ async fn test_career_stats_total_play_seconds_sums() {
     let a = db::create_user(&pool, "a", &hash).await.unwrap();
     let b = db::create_user(&pool, "b", &hash).await.unwrap();
 
-    insert_game(&pool, a, b, "Won", "Lost", 100, 50, None, Some(10.0), 25.5, 10.0).await;
-    insert_game(&pool, a, b, "Lost", "Won", 30, 150, Some(40.0), None, 40.0, 80.0).await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Won",
+        "Lost",
+        100,
+        50,
+        None,
+        Some(10.0),
+        25.5,
+        10.0,
+    )
+    .await;
+    insert_game(
+        &pool,
+        a,
+        b,
+        "Lost",
+        "Won",
+        30,
+        150,
+        Some(40.0),
+        None,
+        40.0,
+        80.0,
+    )
+    .await;
 
     let stats = db::get_user_career_stats(&pool, a).await.unwrap();
     assert!((stats.total_play_seconds - 65.5).abs() < 1e-6);

@@ -428,12 +428,11 @@ pub async fn get_user_career_stats(pool: &SqlitePool, user_id: i64) -> sqlx::Res
     .fetch_one(pool)
     .await?;
 
-    let total_play_seconds: Option<f64> = sqlx::query_scalar(
-        "SELECT SUM(played_seconds) FROM game_participants WHERE user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await?;
+    let total_play_seconds: Option<f64> =
+        sqlx::query_scalar("SELECT SUM(played_seconds) FROM game_participants WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
 
     Ok(CareerStats {
         wins,

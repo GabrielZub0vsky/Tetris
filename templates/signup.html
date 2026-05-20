@@ -10,7 +10,12 @@
     <input type="password" name="password" required>
     <label>Confirm Password</label>
     <input type="password" name="confirm_password" required>
-    {% if error %}
+    {% if username_taken %}
+      <div class="error" style="padding:0.75rem;border:1px solid #c00;border-radius:4px;background:#fee;color:#900">
+        Username <strong>{{ taken_username }}</strong> already exists.
+        Please <a href="/login?username={{ taken_username | urlencode }}">log in</a> with that account instead.
+      </div>
+    {% elif error %}
       <span class="error">{{ error }}</span>
     {% endif %}
     <button type="submit">Create account</button>

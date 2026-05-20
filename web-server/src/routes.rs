@@ -62,14 +62,26 @@ fn render(env: &Environment<'_>, name: &str, ctx: minijinja::Value) -> Response 
 
 // ── Login ────────────────────────────────────────────────────────────────────
 
-pub async fn get_login(auth_session: AuthSession, State(state): State<AppState>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct LoginQuery {
+    pub username: Option<String>,
+}
+
+pub async fn get_login(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Query(q): Query<LoginQuery>,
+) -> Response {
     if auth_session.user.is_some() {
         return Redirect::to("/users").into_response();
     }
     render(
         &state.env,
         "login.html",
-        minijinja::context! { error => "" },
+        minijinja::context! {
+            error => "",
+            prefill_username => q.username.unwrap_or_default(),
+        },
     )
 }
 
@@ -163,7 +175,11 @@ pub async fn post_signup(
         Err(e) if e.to_string().contains("UNIQUE constraint failed") => render(
             &state.env,
             "signup.html",
-            minijinja::context! { error => "Username already taken." },
+            minijinja::context! {
+                error => "",
+                username_taken => true,
+                taken_username => username,
+            },
         ),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

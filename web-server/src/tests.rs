@@ -782,6 +782,70 @@ async fn login_as(app: &Router, username: &str, password: &str) -> axum::http::R
 }
 
 #[tokio::test]
+async fn test_signup_duplicate_username_shows_login_link() {
+    let (app, _pool) = build_test_app().await;
+
+    // First signup succeeds.
+    let _ = login_as(&app, "dupname", "password").await;
+
+    // Second signup with same name returns signup page with duplicate warning.
+    let body = format!("username=dupname&password=password&confirm_password=password");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/signup")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(
+        html.contains("already exists"),
+        "expected 'already exists' in body: {html}"
+    );
+    assert!(
+        html.contains("/login?username=dupname"),
+        "expected /login?username=dupname link in body"
+    );
+    assert!(
+        html.contains("<strong>dupname</strong>"),
+        "expected username highlighted with <strong>"
+    );
+}
+
+#[tokio::test]
+async fn test_login_page_prefills_username_from_query() {
+    let (app, _pool) = build_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/login?username=alice")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(
+        html.contains(r#"value="alice""#),
+        "username input should be prefilled with 'alice': {html}"
+    );
+}
+
+#[tokio::test]
 async fn test_root_redirects_when_not_logged_in() {
     let (app, _pool) = build_test_app().await;
 

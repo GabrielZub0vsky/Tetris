@@ -263,7 +263,7 @@ mod tests {
         );
 
         assert_eq!(
-            GameConfig::load(r#"{"bag":{"FixedSeed": 727},"animate_title":true,"server_addr":"1.2.3.4","server_port":1453,"replication_interval_ms":17,"send_garbage":false,"expected_players":3}"#).unwrap(),
+            GameConfig::load(r#"{"bag":{"FixedSeed": 727},"animate_title":true,"server_addr":"1.2.3.4","server_port":1453,"replication_interval_ms":17,"send_garbage":true,"expected_players":3}"#).unwrap(),
             GameConfig {
                 bag: BagType::FixedSeed(727),
                 server_addr: Ipv4Addr::from_octets([1, 2, 3, 4]).into(),

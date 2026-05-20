@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use axum::{
     Router,
+    response::Redirect,
     routing::{get, post},
 };
 use axum_login::{AuthManagerLayerBuilder, login_required};
@@ -18,7 +19,6 @@ use tower_sessions_sqlx_store::SqliteStore;
 mod auth;
 mod db;
 mod routes;
-mod seed;
 
 #[cfg(test)]
 mod tests;
@@ -39,7 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     db::init_schema(&pool).await?;
-    seed::seed_if_empty(&pool).await?;
 
     // Kill any lobbies left over from a previous run.
     cleanup_orphaned_lobbies(&pool).await;
@@ -81,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let protected = Router::new()
+        .route("/", get(|| async { Redirect::to("/lobbies") }))
         .route("/users", get(routes::get_users))
         .route("/users/{id}", get(routes::get_user_detail))
         .route("/online", get(routes::get_online))

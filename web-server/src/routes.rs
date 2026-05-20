@@ -179,20 +179,55 @@ pub async fn post_logout(mut auth_session: AuthSession) -> Response {
 
 pub async fn get_users(auth_session: AuthSession, State(state): State<AppState>) -> Response {
     let current_user = auth_session.user.as_ref().map(|u| u.username.clone());
-    match db::list_users(&state.pool).await {
-        Ok(users) => render(
-            &state.env,
-            "users.html",
-            minijinja::context! {
-                users => users.iter().map(|u| minijinja::context! {
-                    id => u.id,
-                    username => u.username.clone(),
-                    created_at => u.created_at.clone(),
-                }).collect::<Vec<_>>(),
-                current_user => current_user,
-            },
-        ),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let users = match db::list_users(&state.pool).await {
+        Ok(u) => u,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+
+    let mut rows = Vec::with_capacity(users.len());
+    for u in &users {
+        let stats = db::get_user_career_stats(&state.pool, u.id)
+            .await
+            .unwrap_or_default();
+        rows.push(minijinja::context! {
+            id => u.id,
+            username => u.username.clone(),
+            created_at => u.created_at.clone(),
+            wins => stats.wins,
+            losses => stats.losses,
+            win_pct => format!("{:.1}", stats.win_pct),
+            highest_score => stats.highest_score,
+            fastest_elim => stats.fastest_elim_seconds
+                .map(|s| format!("{:.1}s", s))
+                .unwrap_or_else(|| "—".to_string()),
+            total_play => format_duration(stats.total_play_seconds),
+        });
+    }
+
+    render(
+        &state.env,
+        "users.html",
+        minijinja::context! {
+            users => rows,
+            current_user => current_user,
+        },
+    )
+}
+
+fn format_duration(seconds: f64) -> String {
+    if seconds <= 0.0 {
+        return "—".to_string();
+    }
+    let total = seconds as i64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
     }
 }
 
@@ -213,7 +248,7 @@ pub async fn get_user_detail(
     let games = db::get_user_games(&state.pool, user_id)
         .await
         .unwrap_or_default();
-    let (wins, losses, draws) = db::get_user_stats(&state.pool, user_id)
+    let stats = db::get_user_career_stats(&state.pool, user_id)
         .await
         .unwrap_or_default();
 
@@ -232,9 +267,15 @@ pub async fn get_user_detail(
                 verdict => g.verdict.clone(),
                 opponent => g.opponent_username.clone().unwrap_or_else(|| "Unknown".to_string()),
             }).collect::<Vec<_>>(),
-            wins => wins,
-            losses => losses,
-            draws => draws,
+            wins => stats.wins,
+            losses => stats.losses,
+            draws => stats.draws,
+            win_pct => format!("{:.1}", stats.win_pct),
+            highest_score => stats.highest_score,
+            fastest_elim => stats.fastest_elim_seconds
+                .map(|s| format!("{:.1}s", s))
+                .unwrap_or_else(|| "—".to_string()),
+            total_play => format_duration(stats.total_play_seconds),
             current_user => current_user,
         },
     )
@@ -339,6 +380,13 @@ pub async fn post_create_lobby(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let _ = db::add_lobby_member(&state.pool, lobby_id, user.id).await;
+
+    let new_count = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(0);
+    if new_count >= form.max_players {
+        let _ = db::set_lobby_status(&state.pool, lobby_id, "running").await;
+    }
 
     spawn_game_server(&state, lobby_id, port, form.max_players).await;
 

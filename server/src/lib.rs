@@ -57,6 +57,17 @@ pub struct GameOutcomes {
     pub outcomes: HashMap<Entity, String>,
 }
 
+/// Per-game timing and score tracking for stats recording.
+#[derive(Resource, Default)]
+pub struct GameTracking {
+    /// Wall-clock instant the game switched to Running.
+    pub start: Option<std::time::Instant>,
+    /// Seconds since game start when each client was eliminated.
+    pub elim_at: HashMap<Entity, f64>,
+    /// Final score snapshot per client (captured when ToDrop is added).
+    pub final_scores: HashMap<Entity, u32>,
+}
+
 /// Inject the systems and plugins for this game into the app.
 pub fn build_app(app: &mut App) {
     use bevy::prelude::*;
@@ -68,6 +79,7 @@ pub fn build_app(app: &mut App) {
         .init_state::<ServerState>()
         .init_resource::<ClientOrder>()
         .init_resource::<GameOutcomes>()
+        .init_resource::<GameTracking>()
         .add_systems(
             FixedUpdate,
             (
@@ -95,7 +107,8 @@ pub fn build_app(app: &mut App) {
         .add_observer(send_garbage)
         .add_observer(update_hard_drop)
         .add_observer(game_over_on_esc)
-        .add_observer(disconnect_on_game_over);
+        .add_observer(disconnect_on_game_over)
+        .add_observer(record::snapshot_on_elimination);
 }
 
 /// Convert given query to a hash map indexed by the owner of each query data.

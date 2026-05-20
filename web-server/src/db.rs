@@ -101,11 +101,23 @@ pub async fn init_schema(pool: &SqlitePool) -> sqlx::Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            verdict TEXT NOT NULL CHECK(verdict IN ('Won', 'Lost', 'Draw'))
+            verdict TEXT NOT NULL CHECK(verdict IN ('Won', 'Lost', 'Draw')),
+            score INTEGER,
+            eliminated_at_seconds REAL,
+            played_seconds REAL
         )",
     )
     .execute(pool)
     .await?;
+
+    // Idempotent migrations for older DBs missing the new columns.
+    for col in [
+        "ALTER TABLE game_participants ADD COLUMN score INTEGER",
+        "ALTER TABLE game_participants ADD COLUMN eliminated_at_seconds REAL",
+        "ALTER TABLE game_participants ADD COLUMN played_seconds REAL",
+    ] {
+        let _ = sqlx::query(col).execute(pool).await;
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS lobbies (
@@ -372,6 +384,66 @@ pub async fn get_user_games(pool: &SqlitePool, user_id: i64) -> sqlx::Result<Vec
     .bind(user_id)
     .fetch_all(pool)
     .await
+}
+
+/// Career-long aggregate stats for one user.
+#[derive(Debug, Clone, Default)]
+pub struct CareerStats {
+    pub wins: i64,
+    pub losses: i64,
+    pub draws: i64,
+    pub win_pct: f64,
+    pub highest_score: i64,
+    /// Quickest time (seconds) the user knocked out an opponent
+    /// (= min eliminated_at among opponents in games the user won).
+    pub fastest_elim_seconds: Option<f64>,
+    pub total_play_seconds: f64,
+}
+
+/// Compute career stats for one user.
+pub async fn get_user_career_stats(pool: &SqlitePool, user_id: i64) -> sqlx::Result<CareerStats> {
+    let (wins, losses, draws) = get_user_stats(pool, user_id).await?;
+    let total = (wins + losses + draws) as f64;
+    let win_pct = if total > 0.0 {
+        wins as f64 / total * 100.0
+    } else {
+        0.0
+    };
+
+    let highest_score: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(score) FROM game_participants WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+
+    let fastest_elim_seconds: Option<f64> = sqlx::query_scalar(
+        "SELECT MIN(opp.eliminated_at_seconds)
+         FROM game_participants me
+         JOIN game_participants opp
+           ON opp.game_id = me.game_id AND opp.user_id != me.user_id
+         WHERE me.user_id = ? AND me.verdict = 'Won'
+           AND opp.eliminated_at_seconds IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    let total_play_seconds: Option<f64> = sqlx::query_scalar(
+        "SELECT SUM(played_seconds) FROM game_participants WHERE user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(CareerStats {
+        wins,
+        losses,
+        draws,
+        win_pct,
+        highest_score: highest_score.unwrap_or(0),
+        fastest_elim_seconds,
+        total_play_seconds: total_play_seconds.unwrap_or(0.0),
+    })
 }
 
 /// Count wins/losses/draws for a user.

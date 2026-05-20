@@ -8,6 +8,12 @@
       <tr>
         <th>Username</th>
         <th>Joined</th>
+        <th>W</th>
+        <th>L</th>
+        <th>Win %</th>
+        <th>High Score</th>
+        <th>Fastest KO</th>
+        <th>Total Play Time</th>
       </tr>
     </thead>
     <tbody>
@@ -15,6 +21,12 @@
       <tr>
         <td><a href="/users/{{ user.id }}">{{ user.username }}</a></td>
         <td style="color:#666">{{ user.created_at }}</td>
+        <td><span class="badge-won">{{ user.wins }}</span></td>
+        <td><span class="badge-lost">{{ user.losses }}</span></td>
+        <td>{{ user.win_pct }}%</td>
+        <td>{{ user.highest_score }}</td>
+        <td>{{ user.fastest_elim }}</td>
+        <td>{{ user.total_play }}</td>
       </tr>
       {% endfor %}
     </tbody>

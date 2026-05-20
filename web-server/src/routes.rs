@@ -247,13 +247,13 @@ fn sort_entries(entries: &mut [(db::User, db::CareerStats)], key: &str) {
                 .to_lowercase()
                 .cmp(&b.0.username.to_lowercase())
         }),
-        "losses" => entries.sort_by(|a, b| b.1.losses.cmp(&a.1.losses)),
+        "losses" => entries.sort_by_key(|e| std::cmp::Reverse(e.1.losses)),
         "win_pct" => entries.sort_by(|a, b| {
             b.1.win_pct
                 .partial_cmp(&a.1.win_pct)
                 .unwrap_or(CmpOrd::Equal)
         }),
-        "highest_score" => entries.sort_by(|a, b| b.1.highest_score.cmp(&a.1.highest_score)),
+        "highest_score" => entries.sort_by_key(|e| std::cmp::Reverse(e.1.highest_score)),
         "fastest_elim" => {
             entries.sort_by(
                 |a, b| match (a.1.fastest_elim_seconds, b.1.fastest_elim_seconds) {
@@ -270,7 +270,7 @@ fn sort_entries(entries: &mut [(db::User, db::CareerStats)], key: &str) {
                 .unwrap_or(CmpOrd::Equal)
         }),
         // Default: wins desc.
-        _ => entries.sort_by(|a, b| b.1.wins.cmp(&a.1.wins)),
+        _ => entries.sort_by_key(|e| std::cmp::Reverse(e.1.wins)),
     }
 }
 

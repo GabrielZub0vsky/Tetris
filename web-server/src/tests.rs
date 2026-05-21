@@ -1306,7 +1306,10 @@ async fn test_play_forfeit_noop_when_not_in_running_lobby() {
         .unwrap()
         .id;
     let (_, losses, _) = db::get_user_stats(&pool, idle3).await.unwrap();
-    assert_eq!(losses, 0, "forfeit must NOT record a loss without a running lobby");
+    assert_eq!(
+        losses, 0,
+        "forfeit must NOT record a loss without a running lobby"
+    );
 }
 
 /// If the lobby is still in `waiting` (game hasn't started yet) the

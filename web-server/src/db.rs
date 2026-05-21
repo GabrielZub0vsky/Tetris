@@ -386,6 +386,26 @@ pub async fn get_user_games(pool: &SqlitePool, user_id: i64) -> sqlx::Result<Vec
     .await
 }
 
+/// Record a fresh "Lost" game for a user who quit a running game.
+///
+/// Used by `post_leave_lobby` when the user clicks Leave while the lobby
+/// is in the `running` state. Creates a brand-new `games` row plus a
+/// single `game_participants` row marked `Lost`, so the forfeit shows up
+/// in their career stats and game history immediately.
+pub async fn record_forfeit_loss(pool: &SqlitePool, user_id: i64) -> sqlx::Result<()> {
+    let game_id: i64 = sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
+        .fetch_one(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, 'Lost')",
+    )
+    .bind(game_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Career-long aggregate stats for one user.
 #[derive(Debug, Clone, Default)]
 pub struct CareerStats {

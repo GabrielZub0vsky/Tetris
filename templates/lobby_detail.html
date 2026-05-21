@@ -66,4 +66,35 @@
     </form>
   {% endif %}
 {% endif %}
+
+<script>
+  // Poll the lobby status every 3 seconds. If the lobby disappears we
+  // show a popup with the reason (e.g. inactivity) and send the user
+  // back to the lobby list.
+  (function () {
+    const LOBBY_ID = {{ lobby.id }};
+    let notified = false;
+
+    async function pollLobbyStatus() {
+      if (notified) return;
+      try {
+        const res = await fetch(`/lobbies/${LOBBY_ID}/status`, {
+          credentials: "same-origin",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.alive) {
+          notified = true;
+          const reason = data.killed_reason || "the lobby ended";
+          alert(`This lobby has been killed: ${reason}. You will be returned to the lobby list.`);
+          window.location.href = "/lobbies";
+        }
+      } catch (e) {
+        /* network blip — keep polling */
+      }
+    }
+
+    setInterval(pollLobbyStatus, 3000);
+  })();
+</script>
 {% endblock %}

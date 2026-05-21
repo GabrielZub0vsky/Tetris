@@ -18,6 +18,11 @@ use tower_sessions_sqlx_store::SqliteStore;
 use crate::{auth, build_template_env, db, routes::AppState};
 
 async fn build_test_app() -> (Router, SqlitePool) {
+    let (app, pool, _state) = build_test_app_with_state().await;
+    (app, pool)
+}
+
+async fn build_test_app_with_state() -> (Router, SqlitePool, AppState) {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     db::init_schema(&pool).await.unwrap();
 
@@ -29,11 +34,18 @@ async fn build_test_app() -> (Router, SqlitePool) {
     let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
     let env = build_template_env();
+    let mut initial_ports = std::collections::HashMap::new();
+    for p in crate::BASE_GAME_PORT..=crate::MAX_GAME_PORT {
+        initial_ports.insert(p, false);
+    }
     let state = AppState {
         pool: pool.clone(),
         env: Arc::new(env),
         processes: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        next_port: std::sync::Arc::new(std::sync::atomic::AtomicU16::new(1338)),
+        port_pool: std::sync::Arc::new(std::sync::Mutex::new(initial_ports)),
+        killed_lobbies: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     };
 
     let protected = Router::new()
@@ -43,6 +55,10 @@ async fn build_test_app() -> (Router, SqlitePool) {
         )
         .route("/users", get(crate::routes::get_users))
         .route("/users/{id}", get(crate::routes::get_user_detail))
+        .route(
+            "/lobbies/{id}/status",
+            get(crate::routes::get_lobby_status),
+        )
         .route("/online", get(crate::routes::get_online))
         .route("/logout", post(crate::routes::post_logout))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
@@ -61,11 +77,12 @@ async fn build_test_app() -> (Router, SqlitePool) {
         .merge(protected)
         .merge(public)
         .layer(auth_layer)
-        .with_state(state);
+        .with_state(state.clone());
 
-    (app, pool)
+    (app, pool, state)
 }
 
+/// GET /login is a public route — must return 200 OK even without a session.
 #[tokio::test]
 async fn test_login_page_returns_200() {
     let (app, _pool) = build_test_app().await;
@@ -83,6 +100,7 @@ async fn test_login_page_returns_200() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// GET /signup is a public route — must return 200 OK even without a session.
 #[tokio::test]
 async fn test_signup_page_returns_200() {
     let (app, _pool) = build_test_app().await;
@@ -100,6 +118,8 @@ async fn test_signup_page_returns_200() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// /users is behind login_required! — unauthenticated requests must be
+/// bounced with a 307 redirect (handled by the axum-login middleware).
 #[tokio::test]
 async fn test_users_page_redirects_when_not_logged_in() {
     let (app, _pool) = build_test_app().await;
@@ -117,6 +137,9 @@ async fn test_users_page_redirects_when_not_logged_in() {
     assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
 }
 
+/// End-to-end exercise of `db::create_user` + the auth Backend:
+/// insert a user with a hashed password, then verify Backend::authenticate
+/// returns the same user when given matching credentials.
 #[tokio::test]
 async fn test_create_user_and_authenticate() {
     let (_app, pool) = build_test_app().await;
@@ -144,6 +167,8 @@ async fn test_create_user_and_authenticate() {
     assert!(result.is_some());
 }
 
+/// Backend::authenticate must reject a real user when the supplied password
+/// does not match the stored argon2/bcrypt hash. Returns Ok(None), not Err.
 #[tokio::test]
 async fn test_wrong_password_fails_auth() {
     let (_app, pool) = build_test_app().await;
@@ -164,6 +189,8 @@ async fn test_wrong_password_fails_auth() {
     assert!(result.is_none());
 }
 
+/// `users.username` carries a UNIQUE constraint — inserting the same name
+/// twice must surface a sqlx error rather than silently succeed.
 #[tokio::test]
 async fn test_duplicate_username_fails() {
     let (_app, pool) = build_test_app().await;
@@ -175,6 +202,9 @@ async fn test_duplicate_username_fails() {
     assert!(result.is_err());
 }
 
+/// A fresh user with no game_participants rows should report 0/0/0
+/// for (wins, losses, draws). Guards against COUNT() over an empty
+/// result set returning anything other than zero.
 #[tokio::test]
 async fn test_user_stats_empty() {
     let (_app, pool) = build_test_app().await;
@@ -188,6 +218,12 @@ async fn test_user_stats_empty() {
     assert_eq!(draws, 0);
 }
 
+/// Inserting one game with a Won/Lost pair of participants must:
+///   * give the winner +1 wins, 0 losses
+///   * give the loser  0 wins, +1 losses
+///   * show up in get_user_games() for both players
+/// Covers the join between games + game_participants + users used by
+/// the user-detail page.
 #[tokio::test]
 async fn test_game_history_recorded() {
     let (_app, pool) = build_test_app().await;
@@ -230,6 +266,8 @@ async fn test_game_history_recorded() {
     assert_eq!(games[0].verdict, "Won");
 }
 
+/// A newly-created user has `last_seen_at = NULL` so they must NOT appear
+/// in list_online_users() until touch_user() updates that column.
 #[tokio::test]
 async fn test_online_users_empty_initially() {
     let (_app, pool) = build_test_app().await;
@@ -283,6 +321,8 @@ async fn insert_game(
     game_id
 }
 
+/// CareerStats for a user with no participations should default to all
+/// zeros / None — not blow up on MAX/MIN/SUM over zero rows.
 #[tokio::test]
 async fn test_career_stats_empty_user() {
     let (_app, pool) = build_test_app().await;
@@ -299,6 +339,8 @@ async fn test_career_stats_empty_user() {
     assert_eq!(stats.total_play_seconds, 0.0);
 }
 
+/// win_pct = wins / (wins + losses + draws) * 100. Draws count toward the
+/// denominator. This test seeds 2 wins, 1 loss, 1 draw → expect exactly 50.0%.
 #[tokio::test]
 async fn test_career_stats_win_pct() {
     let (_app, pool) = build_test_app().await;
@@ -358,6 +400,8 @@ async fn test_career_stats_win_pct() {
     assert!((stats.win_pct - 50.0).abs() < 1e-6);
 }
 
+/// highest_score = MAX(score) across all of a user's games regardless of
+/// verdict — a user can post their personal best in a game they lost.
 #[tokio::test]
 async fn test_career_stats_highest_score() {
     let (_app, pool) = build_test_app().await;
@@ -412,6 +456,9 @@ async fn test_career_stats_highest_score() {
     assert_eq!(stats.highest_score, 1234);
 }
 
+/// "Fastest KO" is the shortest opponent elimination time across games
+/// the user WON. Eliminations from games the user lost must be ignored —
+/// otherwise a player who died early would look like a fast killer.
 #[tokio::test]
 async fn test_career_stats_fastest_elim_only_counts_wins() {
     let (_app, pool) = build_test_app().await;
@@ -468,6 +515,8 @@ async fn test_career_stats_fastest_elim_only_counts_wins() {
     assert_eq!(stats.fastest_elim_seconds, Some(12.0));
 }
 
+/// fastest_elim_seconds must be None for a user who has played but never
+/// won — the leaderboard renders an em-dash for None.
 #[tokio::test]
 async fn test_career_stats_fastest_elim_none_when_no_wins() {
     let (_app, pool) = build_test_app().await;
@@ -494,6 +543,8 @@ async fn test_career_stats_fastest_elim_none_when_no_wins() {
     assert!(stats.fastest_elim_seconds.is_none());
 }
 
+/// total_play_seconds = SUM(played_seconds) across the user's games.
+/// Uses a float comparison with small epsilon. Catches accidental MAX/AVG.
 #[tokio::test]
 async fn test_career_stats_total_play_seconds_sums() {
     let (_app, pool) = build_test_app().await;
@@ -534,6 +585,9 @@ async fn test_career_stats_total_play_seconds_sums() {
     assert!((stats.total_play_seconds - 65.5).abs() < 1e-6);
 }
 
+/// A lobby with two members joining (max_players=2) should transition from
+/// 'waiting' to 'running'. Mirrors the runtime logic in post_join_lobby /
+/// post_create_lobby so the state transition is locked down at the db layer.
 #[tokio::test]
 async fn test_lobby_full_marks_running() {
     let (_app, pool) = build_test_app().await;
@@ -560,6 +614,9 @@ async fn test_lobby_full_marks_running() {
     assert_eq!(lobby.status, "running");
 }
 
+/// db::set_lobby_status writes the new value back to SQLite and a subsequent
+/// get_lobby reads it back. Guards against the CHECK constraint or UPDATE
+/// statement silently failing.
 #[tokio::test]
 async fn test_set_lobby_status_persists() {
     let (_app, pool) = build_test_app().await;
@@ -574,6 +631,10 @@ async fn test_set_lobby_status_persists() {
     assert_eq!(lobby.status, "running");
 }
 
+/// Hits /users?sort=wins with a logged-in session and confirms the user
+/// with more wins appears earlier in the rendered HTML than the user with
+/// fewer wins. Exercises the full path: Query extractor → sort_entries →
+/// template render.
 #[tokio::test]
 async fn test_users_page_sort_by_wins_works() {
     let (app, pool) = build_test_app().await;
@@ -675,6 +736,9 @@ async fn test_users_page_sort_by_wins_works() {
     );
 }
 
+/// fastest_elim is the only metric that sorts ASCENDING (smaller = faster).
+/// This test makes sure the comparator wasn't accidentally written backwards
+/// like the other "bigger = better" columns.
 #[tokio::test]
 async fn test_users_page_sort_by_fastest_elim_ascending() {
     let (app, pool) = build_test_app().await;
@@ -781,6 +845,12 @@ async fn login_as(app: &Router, username: &str, password: &str) -> axum::http::R
         .unwrap()
 }
 
+/// When a signup POST hits the UNIQUE constraint on username, the response
+/// must:
+///   * still be 200 (render the signup page, not 500)
+///   * contain the phrase "already exists"
+///   * highlight the conflicting username inside <strong>...</strong>
+///   * include a /login?username=NAME deep-link so the user can switch over.
 #[tokio::test]
 async fn test_signup_duplicate_username_shows_login_link() {
     let (app, _pool) = build_test_app().await;
@@ -821,6 +891,9 @@ async fn test_signup_duplicate_username_shows_login_link() {
     );
 }
 
+/// /login?username=alice should prefill the username input with `alice`
+/// so the redirect from the duplicate-signup page lands users on a half-
+/// completed login form.
 #[tokio::test]
 async fn test_login_page_prefills_username_from_query() {
     let (app, _pool) = build_test_app().await;
@@ -845,6 +918,84 @@ async fn test_login_page_prefills_username_from_query() {
     );
 }
 
+/// allocate_port must return the numerically lowest free port each time.
+/// After releasing a middle port, the next allocation should reuse it
+/// before continuing past the highest previously-issued port.
+#[tokio::test]
+async fn test_port_pool_allocates_lowest_first() {
+    use crate::routes::{allocate_port, release_port};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    let mut map = HashMap::new();
+    for p in crate::BASE_GAME_PORT..=crate::MAX_GAME_PORT {
+        map.insert(p, false);
+    }
+    let pool = Mutex::new(map);
+
+    // Should hand out the lowest port first.
+    assert_eq!(allocate_port(&pool), Some(1338));
+    assert_eq!(allocate_port(&pool), Some(1339));
+    assert_eq!(allocate_port(&pool), Some(1340));
+
+    // Release 1339 → next allocation reuses it before going past 1340.
+    release_port(&pool, 1339);
+    assert_eq!(allocate_port(&pool), Some(1339));
+    assert_eq!(allocate_port(&pool), Some(1341));
+}
+
+/// The pool holds exactly 100 ports (1338..=1437). After 100 allocations
+/// the next call must return None (so post_create_lobby can show an
+/// "at capacity" error). Releasing one port then re-allocates that exact
+/// port number.
+#[tokio::test]
+async fn test_port_pool_exhaustion_returns_none() {
+    use crate::routes::{allocate_port, release_port};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    let mut map = HashMap::new();
+    for p in crate::BASE_GAME_PORT..=crate::MAX_GAME_PORT {
+        map.insert(p, false);
+    }
+    let pool = Mutex::new(map);
+
+    // Drain all 100 ports.
+    for _ in 0..100 {
+        assert!(allocate_port(&pool).is_some());
+    }
+    // Pool exhausted.
+    assert_eq!(allocate_port(&pool), None);
+
+    // Release one → next allocation succeeds again.
+    release_port(&pool, 1400);
+    assert_eq!(allocate_port(&pool), Some(1400));
+    assert_eq!(allocate_port(&pool), None);
+}
+
+/// release_port called with a port that isn't part of the configured pool
+/// must NOT insert a new entry or panic — defensive against stale DB rows
+/// from a previous code version with a different range.
+#[tokio::test]
+async fn test_release_port_outside_pool_is_noop() {
+    use crate::routes::release_port;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    let mut map = HashMap::new();
+    map.insert(1338u16, true);
+    let pool = Mutex::new(map);
+
+    release_port(&pool, 9999);
+    // 1338 stays in use; 9999 not inserted.
+    let guard = pool.lock().unwrap();
+    assert_eq!(guard.get(&1338), Some(&true));
+    assert!(!guard.contains_key(&9999));
+}
+
+/// Root path "/" is registered behind login_required! and redirects to
+/// /lobbies once authenticated. An unauthenticated hit should produce
+/// a redirect (307 / 303 / 302 are all acceptable) rather than 404 or 500.
 #[tokio::test]
 async fn test_root_redirects_when_not_logged_in() {
     let (app, _pool) = build_test_app().await;
@@ -864,6 +1015,300 @@ async fn test_root_redirects_when_not_logged_in() {
     );
 }
 
+/// `record_forfeit_loss` writes one new game row + one `Lost`
+/// participant for the user — guarantees the user's wins/losses jump
+/// immediately when they bail on a running game.
+#[tokio::test]
+async fn test_record_forfeit_loss_adds_lost_record() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let user = db::create_user(&pool, "leaver", &hash).await.unwrap();
+
+    let (wins0, losses0, _) = db::get_user_stats(&pool, user).await.unwrap();
+    assert_eq!((wins0, losses0), (0, 0));
+
+    db::record_forfeit_loss(&pool, user).await.unwrap();
+
+    let (wins, losses, draws) = db::get_user_stats(&pool, user).await.unwrap();
+    assert_eq!(wins, 0);
+    assert_eq!(losses, 1, "forfeit must count as a loss");
+    assert_eq!(draws, 0);
+
+    // History endpoint should also surface it.
+    let games = db::get_user_games(&pool, user).await.unwrap();
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].verdict, "Lost");
+}
+
+/// Two back-to-back forfeit calls create two distinct game rows — no
+/// accidental deduplication / UPSERT logic in `record_forfeit_loss`.
+#[tokio::test]
+async fn test_record_forfeit_loss_creates_distinct_games() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let user = db::create_user(&pool, "serialleaver", &hash)
+        .await
+        .unwrap();
+
+    db::record_forfeit_loss(&pool, user).await.unwrap();
+    db::record_forfeit_loss(&pool, user).await.unwrap();
+
+    let (_, losses, _) = db::get_user_stats(&pool, user).await.unwrap();
+    assert_eq!(losses, 2);
+    let games = db::get_user_games(&pool, user).await.unwrap();
+    assert_eq!(games.len(), 2);
+}
+
+/// `get_user_current_lobby` should return Some for a user in a `waiting`
+/// lobby AND a `running` lobby — both states block joining elsewhere.
+/// `finished` lobbies must NOT match, so once a game is over the user is
+/// free to join another lobby without manual cleanup.
+#[tokio::test]
+async fn test_get_user_current_lobby_only_matches_active_states() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let user = db::create_user(&pool, "u1", &hash).await.unwrap();
+
+    // waiting → matches
+    let l1 = db::create_lobby(&pool, user, 2, 1340).await.unwrap();
+    db::add_lobby_member(&pool, l1, user).await.unwrap();
+    assert!(
+        db::get_user_current_lobby(&pool, user)
+            .await
+            .unwrap()
+            .is_some(),
+        "waiting lobby should match"
+    );
+
+    // running → still matches
+    db::set_lobby_status(&pool, l1, "running").await.unwrap();
+    assert!(
+        db::get_user_current_lobby(&pool, user)
+            .await
+            .unwrap()
+            .is_some(),
+        "running lobby should match"
+    );
+
+    // finished → no longer matches
+    db::set_lobby_status(&pool, l1, "finished").await.unwrap();
+    assert!(
+        db::get_user_current_lobby(&pool, user)
+            .await
+            .unwrap()
+            .is_none(),
+        "finished lobby must NOT count as the user's current lobby"
+    );
+}
+
+/// After the user's lobby is deleted (e.g. host left, all left,
+/// inactivity), the lobby_members cascade frees the user and they can
+/// be added to a fresh lobby. Models the "wait for game to end" path.
+#[tokio::test]
+async fn test_user_free_to_join_after_lobby_destroyed() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let user = db::create_user(&pool, "wanderer", &hash).await.unwrap();
+
+    let first = db::create_lobby(&pool, user, 1, 1341).await.unwrap();
+    db::add_lobby_member(&pool, first, user).await.unwrap();
+    db::set_lobby_status(&pool, first, "running").await.unwrap();
+    db::delete_lobby(&pool, first).await.unwrap();
+
+    // ON DELETE CASCADE wipes lobby_members; user is now lobby-free.
+    assert!(
+        db::get_user_current_lobby(&pool, user)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Joining a new lobby works.
+    let second = db::create_lobby(&pool, user, 1, 1342).await.unwrap();
+    db::add_lobby_member(&pool, second, user).await.unwrap();
+    assert!(
+        db::get_user_current_lobby(&pool, user)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// After forfeiting (leaving) a running lobby — i.e. record_forfeit_loss
+/// + remove_lobby_member — the user has no current lobby and can join
+/// another one. Models the "leave + accept forfeit" path.
+#[tokio::test]
+async fn test_user_can_join_after_forfeit_leave() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "hh", &hash).await.unwrap();
+    let guest = db::create_user(&pool, "gg", &hash).await.unwrap();
+
+    // Two-player running lobby with both members.
+    let lobby = db::create_lobby(&pool, host, 2, 1343).await.unwrap();
+    db::add_lobby_member(&pool, lobby, host).await.unwrap();
+    db::add_lobby_member(&pool, lobby, guest).await.unwrap();
+    db::set_lobby_status(&pool, lobby, "running").await.unwrap();
+
+    // Guest forfeits: record loss + remove.
+    db::record_forfeit_loss(&pool, guest).await.unwrap();
+    db::remove_lobby_member(&pool, lobby, guest).await.unwrap();
+
+    // Guest is now free; they can be added to a different lobby.
+    assert!(
+        db::get_user_current_lobby(&pool, guest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let other = db::create_lobby(&pool, guest, 1, 1344).await.unwrap();
+    db::add_lobby_member(&pool, other, guest).await.unwrap();
+    assert!(
+        db::get_user_current_lobby(&pool, guest)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // And the loss is on the record.
+    let (_, losses, _) = db::get_user_stats(&pool, guest).await.unwrap();
+    assert_eq!(losses, 1);
+}
+
+/// A non-host member calling `remove_lobby_member` must remove only
+/// themselves; the lobby and the other members stay. The host-leaving
+/// branch in `post_leave_lobby` then handles full teardown separately.
+#[tokio::test]
+async fn test_non_host_leave_keeps_lobby_alive() {
+    let (_app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "lobbyhost", &hash).await.unwrap();
+    let guest = db::create_user(&pool, "guest", &hash).await.unwrap();
+
+    let lobby_id = db::create_lobby(&pool, host, 3, 1340).await.unwrap();
+    db::add_lobby_member(&pool, lobby_id, host).await.unwrap();
+    db::add_lobby_member(&pool, lobby_id, guest).await.unwrap();
+
+    // Guest leaves. Lobby still has the host.
+    db::remove_lobby_member(&pool, lobby_id, guest).await.unwrap();
+    let count = db::get_lobby_member_count(&pool, lobby_id).await.unwrap();
+    assert_eq!(count, 1, "host should still be in lobby after guest leaves");
+
+    // Lobby row itself still exists.
+    let lobby = db::get_lobby(&pool, lobby_id).await.unwrap();
+    assert!(lobby.is_some(), "lobby row must remain when a guest leaves");
+}
+
+/// `GET /lobbies/{id}/status` for a live lobby reports `alive=true` and
+/// `killed_reason=null`. Drives the front-end poller's "stay put" path.
+#[tokio::test]
+async fn test_lobby_status_alive_for_active_lobby() {
+    let (app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "lobbyhost", &hash).await.unwrap();
+    let lobby_id = db::create_lobby(&pool, host, 1, 1338).await.unwrap();
+
+    // Need a session for the protected route.
+    let response = login_as(&app, "lobbyhost2", "password").await;
+    let cookie = extract_session_cookie(&response);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/lobbies/{lobby_id}/status"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["alive"], serde_json::json!(true));
+    assert_eq!(json["killed_reason"], serde_json::json!(null));
+}
+
+/// After `mark_lobby_killed` has been called and the row is deleted, the
+/// status endpoint must report `alive=false` and surface the recorded
+/// reason so the JS poller can show a "killed due to X" popup.
+#[tokio::test]
+async fn test_lobby_status_reports_killed_with_reason() {
+    use crate::routes::mark_lobby_killed;
+
+    let (app, pool, state) = build_test_app_with_state().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "lobbyhost", &hash).await.unwrap();
+    let lobby_id = db::create_lobby(&pool, host, 1, 1339).await.unwrap();
+
+    let response = login_as(&app, "watcher", "password").await;
+    let cookie = extract_session_cookie(&response);
+
+    // Simulate the cleanup task: mark killed, then delete the row.
+    mark_lobby_killed(&state.killed_lobbies, lobby_id, "inactivity (test)");
+    db::delete_lobby(&pool, lobby_id).await.unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/lobbies/{lobby_id}/status"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["alive"], serde_json::json!(false));
+    assert_eq!(
+        json["killed_reason"],
+        serde_json::json!("inactivity (test)")
+    );
+}
+
+/// `prune_killed` removes entries older than 5 minutes. We fast-forward
+/// by injecting an entry with an old `killed_at` instant and verifying
+/// it disappears after a prune call.
+#[tokio::test]
+async fn test_prune_killed_drops_old_entries() {
+    use crate::routes::{KilledInfo, prune_killed};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    let mut map = HashMap::new();
+    map.insert(
+        1i64,
+        KilledInfo {
+            reason: "old".into(),
+            killed_at: Instant::now() - Duration::from_secs(600),
+        },
+    );
+    map.insert(
+        2i64,
+        KilledInfo {
+            reason: "fresh".into(),
+            killed_at: Instant::now(),
+        },
+    );
+    let pool = Mutex::new(map);
+    prune_killed(&pool);
+
+    let guard = pool.lock().unwrap();
+    assert!(!guard.contains_key(&1), "10-min-old entry should be pruned");
+    assert!(guard.contains_key(&2), "fresh entry should survive");
+}
+
+/// touch_user updates last_seen_at to `datetime('now')` — afterwards the
+/// user should appear in list_online_users(), which filters for activity
+/// within the last 5 minutes.
 #[tokio::test]
 async fn test_touch_user_marks_online() {
     let (_app, pool) = build_test_app().await;

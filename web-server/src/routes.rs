@@ -1041,7 +1041,23 @@ pub async fn start_game_if_full(state: &AppState, lobby_id: i64, max_players: i6
 /// bundle at the absolute path `/static/client.js` (served via
 /// tower-http's ServeDir) and fetches its game config from
 /// `./config.json`, which resolves to `/play/{port}/config.json`.
-pub async fn get_play_page(Path(port): Path<u16>) -> Response {
+///
+/// Embeds an `INITIAL_PID` constant (the user's max
+/// `game_participants.id` at page-load time) and a small JS poller that
+/// hits `/play/done` every 1.5 s. The game-server writes a participant
+/// row on game end; once `latest > INITIAL_PID`, the page waits for the
+/// WASM banner to render and then redirects to `/lobbies`.
+pub async fn get_play_page(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+) -> Response {
+    let initial_pid: i64 = match auth_session.user.as_ref() {
+        Some(u) => db::get_user_latest_participant_id(&state.pool, u.id)
+            .await
+            .unwrap_or(0),
+        None => 0,
+    };
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1066,10 +1082,61 @@ pub async fn get_play_page(Path(port): Path<u16>) -> Response {
       }}
     }});
   </script>
+  <script>
+    // Poll the web server for a new game_participants row owned by this user.
+    // The game server writes that row on OnExit(Running) — i.e. once the
+    // round is over and a verdict has been recorded. Once detected, give
+    // the WASM banner ~2.5s on screen, then send the browser back to the
+    // lobby list. Without this, the WASM client just shows "You won!" /
+    // "You lost!" and leaves the user stuck on /play/{port}/.
+    const INITIAL_PID = {initial_pid};
+    let redirecting = false;
+    async function pollDone() {{
+      if (redirecting) return;
+      try {{
+        const res = await fetch('/play/done?since=' + INITIAL_PID, {{
+          credentials: 'same-origin',
+        }});
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.done) {{
+          redirecting = true;
+          setTimeout(() => {{ window.location.href = '/lobbies'; }}, 2500);
+        }}
+      }} catch (e) {{ /* transient — keep polling */ }}
+    }}
+    setInterval(pollDone, 1500);
+  </script>
 </body>
 </html>"#
     );
     Html(html).into_response()
+}
+
+/// Query string for `GET /play/done`.
+#[derive(Deserialize)]
+pub struct DoneQuery {
+    pub since: i64,
+}
+
+/// `GET /play/done?since=N` — has the game ended since participant id N?
+///
+/// Cheap JSON poll for the inline script in `get_play_page`. Returns
+/// `{"done": true}` once the user has a `game_participants` row with
+/// `id > since`, which only happens after the game-server finishes the
+/// round and writes its results.
+pub async fn get_play_done(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Query(q): Query<DoneQuery>,
+) -> Response {
+    let Some(user) = auth_session.user.as_ref() else {
+        return axum::Json(serde_json::json!({ "done": false })).into_response();
+    };
+    let latest = db::get_user_latest_participant_id(&state.pool, user.id)
+        .await
+        .unwrap_or(0);
+    axum::Json(serde_json::json!({ "done": latest > q.since })).into_response()
 }
 
 /// `GET /play/{port}/config.json` — return a fresh game-client config

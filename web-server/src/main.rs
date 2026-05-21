@@ -145,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/lobbies/{id}/status", get(routes::get_lobby_status))
         .route("/lobbies/{id}/join", post(routes::post_join_lobby))
         .route("/lobbies/{id}/leave", post(routes::post_leave_lobby))
+        .route("/play/done", get(routes::get_play_done))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
 
     let public = Router::new()

@@ -365,6 +365,21 @@ pub async fn touch_user(pool: &SqlitePool, user_id: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
+/// Return the max `game_participants.id` for a user, or 0 if none exist.
+///
+/// Used as a "high-water mark" so the play page can poll for whether a new
+/// game-completion row has landed since the page loaded — once it has, the
+/// game-server has finished writing the result and the browser can redirect
+/// back to /lobbies.
+pub async fn get_user_latest_participant_id(pool: &SqlitePool, user_id: i64) -> sqlx::Result<i64> {
+    let id: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(id) FROM game_participants WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(id.unwrap_or(0))
+}
+
 /// Fetch game history for a user with opponent info.
 pub async fn get_user_games(pool: &SqlitePool, user_id: i64) -> sqlx::Result<Vec<GameEntry>> {
     sqlx::query_as::<_, GameEntry>(

@@ -43,9 +43,9 @@ async fn build_test_app_with_state() -> (Router, SqlitePool, AppState) {
         env: Arc::new(env),
         processes: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         port_pool: std::sync::Arc::new(std::sync::Mutex::new(initial_ports)),
-        killed_lobbies: std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        )),
+        killed_lobbies: std::sync::Arc::new(
+            std::sync::Mutex::new(std::collections::HashMap::new()),
+        ),
     };
 
     let protected = Router::new()
@@ -55,10 +55,7 @@ async fn build_test_app_with_state() -> (Router, SqlitePool, AppState) {
         )
         .route("/users", get(crate::routes::get_users))
         .route("/users/{id}", get(crate::routes::get_user_detail))
-        .route(
-            "/lobbies/{id}/status",
-            get(crate::routes::get_lobby_status),
-        )
+        .route("/lobbies/{id}/status", get(crate::routes::get_lobby_status))
         .route("/online", get(crate::routes::get_online))
         .route("/logout", post(crate::routes::post_logout))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
@@ -1046,9 +1043,7 @@ async fn test_record_forfeit_loss_adds_lost_record() {
 async fn test_record_forfeit_loss_creates_distinct_games() {
     let (_app, pool) = build_test_app().await;
     let hash = generate_hash("password");
-    let user = db::create_user(&pool, "serialleaver", &hash)
-        .await
-        .unwrap();
+    let user = db::create_user(&pool, "serialleaver", &hash).await.unwrap();
 
     db::record_forfeit_loss(&pool, user).await.unwrap();
     db::record_forfeit_loss(&pool, user).await.unwrap();
@@ -1190,7 +1185,9 @@ async fn test_non_host_leave_keeps_lobby_alive() {
     db::add_lobby_member(&pool, lobby_id, guest).await.unwrap();
 
     // Guest leaves. Lobby still has the host.
-    db::remove_lobby_member(&pool, lobby_id, guest).await.unwrap();
+    db::remove_lobby_member(&pool, lobby_id, guest)
+        .await
+        .unwrap();
     let count = db::get_lobby_member_count(&pool, lobby_id).await.unwrap();
     assert_eq!(count, 1, "host should still be in lobby after guest leaves");
 

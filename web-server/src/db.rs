@@ -396,13 +396,11 @@ pub async fn record_forfeit_loss(pool: &SqlitePool, user_id: i64) -> sqlx::Resul
     let game_id: i64 = sqlx::query_scalar("INSERT INTO games DEFAULT VALUES RETURNING id")
         .fetch_one(pool)
         .await?;
-    sqlx::query(
-        "INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, 'Lost')",
-    )
-    .bind(game_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO game_participants (game_id, user_id, verdict) VALUES (?, ?, 'Lost')")
+        .bind(game_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

@@ -518,8 +518,8 @@ fn format_duration(seconds: f64) -> String {
 ///   1. Look up the target user by id (404 if no row, 500 on DB error).
 ///   2. Pull their game history (game_id, played_at, verdict, opponent).
 ///   3. Pull their full `CareerStats`.
-/// Both stats lookups use `unwrap_or_default()` — a transient query
-/// failure shouldn't blank the page.
+/// 
+/// Both stats lookups use `unwrap_or_default()` — a transient query failure shouldn't blank the page.
 pub async fn get_user_detail(
     auth_session: AuthSession,
     State(state): State<AppState>,
@@ -906,10 +906,7 @@ pub async fn get_lobby_status(
     // background task just for this map.
     prune_killed(&state.killed_lobbies);
 
-    let lobby_exists = matches!(
-        db::get_lobby(&state.pool, lobby_id).await,
-        Ok(Some(_))
-    );
+    let lobby_exists = matches!(db::get_lobby(&state.pool, lobby_id).await, Ok(Some(_)));
     let killed = lookup_killed(&state.killed_lobbies, lobby_id);
 
     // Lobby is alive when the row still exists AND we haven't recorded

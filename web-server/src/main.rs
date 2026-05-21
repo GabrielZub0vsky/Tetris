@@ -4,8 +4,7 @@
 //!
 //! * `auth`    — axum-login glue around the SQLite `users` table.
 //! * `db`      — schema initialization and every SQL query used by the app.
-//! * `routes`  — every HTTP handler, including lobby creation, the leaderboard,
-//!               and the port-pool helpers used to spawn game servers.
+//! * `routes`  — every HTTP handler, including lobby creation, the leaderboard, and the port-pool helpers used to spawn game servers.
 //! * `tests`   — integration tests built against an in-memory SQLite database.
 //!
 //! ## What main() actually does

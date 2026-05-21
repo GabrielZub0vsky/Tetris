@@ -10,7 +10,7 @@ use lightyear::prelude::MessageReceiver;
 use lightyear::prelude::MessageSender;
 
 use crate::ui::TitleText;
-use crate::ui::{BG_COLOR, PADDING, WinPopup, spawn_win_popup};
+use crate::ui::{BG_COLOR, PADDING};
 use common::protocol::*;
 
 use bevy::{platform::collections::HashMap, prelude::*};
@@ -342,37 +342,21 @@ pub fn redraw_side_board<Marker: Component>(
 }
 
 /// Receive the game over message from the server and update the UI.
-///
-/// On `WonContinue` the title flips to a winning state and a popup is spawned
-/// at the bottom of the screen so the user can choose to stop or keep playing.
 pub fn receive_game_over(
     mut receiver: Single<&mut MessageReceiver<GameOverMessage>>,
     mut title: Single<(&mut Text, &mut TextColor), With<TitleText>>,
-    existing_popup: Query<(), With<WinPopup>>,
-    mut commands: Commands,
 ) {
     let messages = receiver
         .receive_with_tick()
         .map(|message| (message.data, message.remote_tick))
         .collect::<Vec<_>>();
-    if messages.is_empty() {
-        return;
-    }
-    info!("Received: {messages:?}");
-    for msg in messages {
-        match msg.0 {
-            GameOverMessage::Won => {
+    if !messages.is_empty() {
+        info!("Received: {messages:?}");
+        for msg in messages {
+            if matches!(msg.0, GameOverMessage::Won) {
                 title.0.0 = "You won!".to_string();
                 title.1.0 = Color::from(tailwind::GREEN_400);
-            }
-            GameOverMessage::WonContinue => {
-                title.0.0 = "You won the battle!".to_string();
-                title.1.0 = Color::from(tailwind::GREEN_400);
-                if existing_popup.is_empty() {
-                    spawn_win_popup(&mut commands);
-                }
-            }
-            GameOverMessage::Lost => {
+            } else {
                 title.0.0 = "You lost!".to_string();
                 title.1.0 = Color::from(tailwind::RED_400);
             }

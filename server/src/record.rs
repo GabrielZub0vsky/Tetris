@@ -12,15 +12,12 @@ pub fn reset_game_tracking(
     mut client_order: ResMut<ClientOrder>,
     mut outcomes: ResMut<GameOutcomes>,
     mut tracking: ResMut<GameTracking>,
-    mut awaiting: ResMut<crate::AwaitingContinue>,
 ) {
     client_order.order.clear();
     outcomes.outcomes.clear();
     tracking.start = Some(std::time::Instant::now());
     tracking.elim_at.clear();
     tracking.final_scores.clear();
-    tracking.finalized = false;
-    awaiting.winner = None;
 }
 
 /// Snapshot elim time + final score when a client is marked ToDrop.
@@ -53,31 +50,14 @@ pub fn snapshot_on_elimination(
 
 /// Write the completed game result to the database.
 ///
-/// Runs on OnExit(Running). Skips silently if no ServerDbConfig, empty
-/// player list, or the result was already finalized by an earlier
-/// continue-yes choice.
+/// Runs on OnExit(Running). Skips silently if no ServerDbConfig or empty player list.
 pub fn write_game_result_to_db(
     db_cfg: Option<Res<ServerDbConfig>>,
     client_order: Res<ClientOrder>,
     outcomes: Res<GameOutcomes>,
     tracking: Res<GameTracking>,
 ) {
-    if tracking.finalized {
-        info!("Game result already finalized — skipping OnExit write");
-        return;
-    }
     let Some(db_cfg) = db_cfg else { return };
-    write_game_result_impl(&db_cfg, &client_order, &outcomes, &tracking);
-}
-
-/// Actual DB-write logic, callable from both the OnExit handler and the
-/// continue-yes path. Caller is responsible for the `finalized` flag.
-pub fn write_game_result_impl(
-    db_cfg: &ServerDbConfig,
-    client_order: &ClientOrder,
-    outcomes: &GameOutcomes,
-    tracking: &GameTracking,
-) {
     if db_cfg.db_path.is_empty() || db_cfg.player_ids.is_empty() {
         return;
     }

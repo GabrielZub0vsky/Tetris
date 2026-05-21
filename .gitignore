@@ -1,5 +1,6 @@
 **/target/
 static/client.js
+static/client_bg.wasm
 *.wasm
 *.gz
 *.zstd

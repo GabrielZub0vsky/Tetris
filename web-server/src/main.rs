@@ -145,16 +145,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/lobbies/{id}/status", get(routes::get_lobby_status))
         .route("/lobbies/{id}/join", post(routes::post_join_lobby))
         .route("/lobbies/{id}/leave", post(routes::post_leave_lobby))
-        .route("/play/forfeit", post(routes::post_play_forfeit))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
 
     let public = Router::new()
         .route("/login", get(routes::get_login).post(routes::post_login))
-        .route("/signup", get(routes::get_signup).post(routes::post_signup));
+        .route("/signup", get(routes::get_signup).post(routes::post_signup))
+        // Game-client (WASM) pages. Public so the freshly-spawned tetris
+        // window can fetch its assets without needing the session cookie.
+        .route("/play/{port}/", get(routes::get_play_page))
+        .route("/play/{port}/config.json", get(routes::get_play_config));
 
     let app = Router::new()
         .merge(protected)
         .merge(public)
+        // Serve the compiled WASM bundle (client.js, client_bg.wasm, etc.)
+        // and the static config templates so /play/*/ can `import` them.
+        .nest_service("/static", tower_http::services::ServeDir::new("static"))
         .layer(auth_layer)
         .with_state(state);
 

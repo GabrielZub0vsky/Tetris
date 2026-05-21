@@ -71,11 +71,6 @@ pub fn build_app(app: &mut App, cfg: config::GameConfig) {
     // UI subsystems
     app.add_systems(
         Update,
-        (
-            animate_time,
-            update_score_text,
-            update_hard_drop_text,
-            handle_popup_clicks,
-        ),
+        (animate_time, update_score_text, update_hard_drop_text),
     );
 }

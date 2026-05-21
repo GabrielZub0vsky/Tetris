@@ -518,7 +518,7 @@ fn format_duration(seconds: f64) -> String {
 ///   1. Look up the target user by id (404 if no row, 500 on DB error).
 ///   2. Pull their game history (game_id, played_at, verdict, opponent).
 ///   3. Pull their full `CareerStats`.
-/// 
+///
 /// Both stats lookups use `unwrap_or_default()` — a transient query failure shouldn't blank the page.
 pub async fn get_user_detail(
     auth_session: AuthSession,

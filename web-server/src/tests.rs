@@ -68,6 +68,11 @@ async fn build_test_app_with_state() -> (Router, SqlitePool, AppState) {
         .route(
             "/signup",
             get(crate::routes::get_signup).post(crate::routes::post_signup),
+        )
+        .route("/play/{port}/", get(crate::routes::get_play_page))
+        .route(
+            "/play/{port}/config.json",
+            get(crate::routes::get_play_config),
         );
 
     let app = Router::new()
@@ -1194,6 +1199,123 @@ async fn test_non_host_leave_keeps_lobby_alive() {
     // Lobby row itself still exists.
     let lobby = db::get_lobby(&pool, lobby_id).await.unwrap();
     assert!(lobby.is_some(), "lobby row must remain when a guest leaves");
+}
+
+/// `/play/{port}/config.json` must return a JSON body with `server_port`
+/// equal to the URL-supplied port. The freshly-loaded WASM client fetches
+/// this endpoint on startup to learn which game-server to dial.
+#[tokio::test]
+async fn test_play_config_carries_correct_port() {
+    let (app, _pool) = build_test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/play/1357/config.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["server_port"], serde_json::json!(1357));
+    assert_eq!(json["server_addr"], serde_json::json!("127.0.0.1"));
+}
+
+/// `/play/{port}/` returns HTML that boots the WASM client.
+#[tokio::test]
+async fn test_play_page_serves_html_with_client_import() {
+    let (app, _pool) = build_test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/play/1338/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains(r"import init from '/static/client.js'"));
+    assert!(html.contains("port 1338"));
+}
+
+/// `start_game_if_full` only spawns the game server / flips status when
+/// the lobby has actually hit its max_players cap. Below that → no-op.
+#[tokio::test]
+async fn test_start_game_if_full_noop_when_not_full() {
+    let (_app, pool, state) = build_test_app_with_state().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "h", &hash).await.unwrap();
+    let lobby = db::create_lobby(&pool, host, 2, 1340).await.unwrap();
+    db::add_lobby_member(&pool, lobby, host).await.unwrap();
+
+    crate::routes::start_game_if_full(&state, lobby, 2).await;
+
+    // Only one of two members → must still be waiting.
+    let row = db::get_lobby(&pool, lobby).await.unwrap().unwrap();
+    assert_eq!(row.status, "waiting");
+}
+
+/// When the lobby IS full, `start_game_if_full` flips status to running.
+/// (We can't easily verify the child process was spawned in a unit test
+/// because `./run-game-server.sh` would attempt a real fork — but the
+/// state transition is the contract we care about here.)
+#[tokio::test]
+async fn test_start_game_if_full_flips_to_running_when_full() {
+    let (_app, pool, state) = build_test_app_with_state().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "h", &hash).await.unwrap();
+    let lobby = db::create_lobby(&pool, host, 1, 1341).await.unwrap();
+    db::add_lobby_member(&pool, lobby, host).await.unwrap();
+
+    // Even if the spawn step fails (no static/ file available in test
+    // working dir, no run-game-server.sh) the status flip must precede
+    // it and stick.
+    crate::routes::start_game_if_full(&state, lobby, 1).await;
+
+    let row = db::get_lobby(&pool, lobby).await.unwrap().unwrap();
+    assert_eq!(row.status, "running");
+}
+
+/// The /lobbies/{id}/status JSON must include `status` and `port` so
+/// the JS poller in lobby_detail.html can decide whether to redirect
+/// the user into the game.
+#[tokio::test]
+async fn test_lobby_status_exposes_status_and_port() {
+    let (app, pool) = build_test_app().await;
+    let hash = generate_hash("password");
+    let host = db::create_user(&pool, "h", &hash).await.unwrap();
+    let lobby = db::create_lobby(&pool, host, 1, 1342).await.unwrap();
+    db::set_lobby_status(&pool, lobby, "running").await.unwrap();
+
+    let response = login_as(&app, "watcher2", "password").await;
+    let cookie = extract_session_cookie(&response);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/lobbies/{lobby}/status"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["alive"], serde_json::json!(true));
+    assert_eq!(json["status"], serde_json::json!("running"));
+    assert_eq!(json["port"], serde_json::json!(1342));
 }
 
 /// `GET /lobbies/{id}/status` for a live lobby reports `alive=true` and

@@ -30,6 +30,10 @@ pub enum Input {
     Hold,
     HardDrop,
     EndGame,
+    /// Winner chose to keep playing solo after last-player-standing.
+    ContinueYes,
+    /// Winner chose to stop after last-player-standing.
+    ContinueNo,
 }
 
 /// Set of logical inputs to be sent as a message
@@ -47,6 +51,8 @@ pub enum GameOverMessage {
     Lost,
     /// The receiver won the game
     Won,
+    /// The receiver won (last player standing) but may choose to keep playing solo.
+    WonContinue,
 }
 
 /// A channel for game state changes

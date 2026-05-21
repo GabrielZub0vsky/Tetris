@@ -66,6 +66,15 @@ pub struct GameTracking {
     pub elim_at: HashMap<Entity, f64>,
     /// Final score snapshot per client (captured when ToDrop is added).
     pub final_scores: HashMap<Entity, u32>,
+    /// Whether the per-game DB write has already happened (so OnExit skips it).
+    pub finalized: bool,
+}
+
+/// Resource recording the winner that's currently awaiting a continue-or-stop choice.
+#[derive(Resource, Default)]
+pub struct AwaitingContinue {
+    /// The winner's client entity, while waiting for the popup response.
+    pub winner: Option<Entity>,
 }
 
 /// Inject the systems and plugins for this game into the app.
@@ -80,6 +89,7 @@ pub fn build_app(app: &mut App) {
         .init_resource::<ClientOrder>()
         .init_resource::<GameOutcomes>()
         .init_resource::<GameTracking>()
+        .init_resource::<AwaitingContinue>()
         .add_systems(
             FixedUpdate,
             (
@@ -108,6 +118,7 @@ pub fn build_app(app: &mut App) {
         .add_observer(update_hard_drop)
         .add_observer(game_over_on_esc)
         .add_observer(disconnect_on_game_over)
+        .add_observer(handle_continue_choice)
         .add_observer(record::snapshot_on_elimination);
 }
 

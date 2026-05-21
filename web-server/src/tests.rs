@@ -56,6 +56,7 @@ async fn build_test_app_with_state() -> (Router, SqlitePool, AppState) {
         .route("/users", get(crate::routes::get_users))
         .route("/users/{id}", get(crate::routes::get_user_detail))
         .route("/lobbies/{id}/status", get(crate::routes::get_lobby_status))
+        .route("/play/forfeit", post(crate::routes::post_play_forfeit))
         .route("/online", get(crate::routes::get_online))
         .route("/logout", post(crate::routes::post_logout))
         .route_layer(login_required!(auth::Backend, login_url = "/login"));
@@ -1199,6 +1200,173 @@ async fn test_non_host_leave_keeps_lobby_alive() {
     // Lobby row itself still exists.
     let lobby = db::get_lobby(&pool, lobby_id).await.unwrap();
     assert!(lobby.is_some(), "lobby row must remain when a guest leaves");
+}
+
+/// `POST /play/forfeit` from an authed user who is currently in a
+/// running lobby must: record a Lost row, remove them from the lobby,
+/// and return 204 No Content (because sendBeacon ignores the body).
+#[tokio::test]
+async fn test_play_forfeit_records_loss_and_removes_member() {
+    let (app, pool) = build_test_app().await;
+
+    // Sign up two users so the host's forfeit doesn't auto-destroy the
+    // lobby on the "last player" branch — we want to verify the membership
+    // removal and the loss both happened.
+    let host_resp = login_as(&app, "fhost", "password").await;
+    let host_cookie = extract_session_cookie(&host_resp);
+    let _ = login_as(&app, "fguest", "password").await;
+    let host = db::get_user_by_username(&pool, "fhost")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let guest = db::get_user_by_username(&pool, "fguest")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+
+    // Build a running 2-player lobby with both members. Use the guest's
+    // user id as host so the forfeiting (fhost) user is NOT the host —
+    // otherwise the lobby would be torn down on forfeit.
+    let lobby = db::create_lobby(&pool, guest, 2, 1345).await.unwrap();
+    db::add_lobby_member(&pool, lobby, host).await.unwrap();
+    db::add_lobby_member(&pool, lobby, guest).await.unwrap();
+    db::set_lobby_status(&pool, lobby, "running").await.unwrap();
+
+    // Forfeit as fhost.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/play/forfeit")
+                .header("cookie", &host_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    // Loss recorded.
+    let (_, losses, _) = db::get_user_stats(&pool, host).await.unwrap();
+    assert_eq!(losses, 1, "forfeit must count as a loss");
+
+    // Removed from lobby_members.
+    let count = db::get_lobby_member_count(&pool, lobby).await.unwrap();
+    assert_eq!(count, 1, "fhost should no longer be a member");
+
+    // Lobby itself still exists (guest is still in it).
+    assert!(db::get_lobby(&pool, lobby).await.unwrap().is_some());
+}
+
+/// `POST /play/forfeit` from a user who isn't in any running lobby is
+/// a no-op — returns 204 without inserting a loss. Avoids spurious
+/// losses if the page fires sendBeacon after the game already ended.
+#[tokio::test]
+async fn test_play_forfeit_noop_when_not_in_running_lobby() {
+    let (app, pool) = build_test_app().await;
+    let _ = login_as(&app, "idle", "password").await;
+    let user = db::get_user_by_username(&pool, "idle")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let resp = login_as(&app, "idle2", "password").await;
+    let cookie = extract_session_cookie(&resp);
+
+    // Switch to idle session — sign in again via post_login? Easier: use
+    // the second sign-up's cookie but also assert a fresh user has no
+    // losses initially.
+    let _ = cookie;
+    let (wins0, losses0, draws0) = db::get_user_stats(&pool, user).await.unwrap();
+    assert_eq!((wins0, losses0, draws0), (0, 0, 0));
+
+    // Forfeit with the idle2 session — they aren't in any lobby.
+    let resp = login_as(&app, "idle3", "password").await;
+    let idle3_cookie = extract_session_cookie(&resp);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/play/forfeit")
+                .header("cookie", &idle3_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let idle3 = db::get_user_by_username(&pool, "idle3")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let (_, losses, _) = db::get_user_stats(&pool, idle3).await.unwrap();
+    assert_eq!(losses, 0, "forfeit must NOT record a loss without a running lobby");
+}
+
+/// If the lobby is still in `waiting` (game hasn't started yet) the
+/// forfeit endpoint should NOT count it as a loss — they haven't
+/// actually played anything.
+#[tokio::test]
+async fn test_play_forfeit_no_loss_when_lobby_only_waiting() {
+    let (app, pool) = build_test_app().await;
+    let resp = login_as(&app, "waiter", "password").await;
+    let cookie = extract_session_cookie(&resp);
+    let user = db::get_user_by_username(&pool, "waiter")
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+
+    // Waiting (2-player) lobby — game not started.
+    let lobby = db::create_lobby(&pool, user, 2, 1346).await.unwrap();
+    db::add_lobby_member(&pool, lobby, user).await.unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/play/forfeit")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let (_, losses, _) = db::get_user_stats(&pool, user).await.unwrap();
+    assert_eq!(losses, 0);
+}
+
+/// HTML page served at /play/{port}/ must register pagehide / beforeunload
+/// handlers that fire `navigator.sendBeacon('/play/forfeit')`. Without
+/// this the back button wouldn't kick the user from the game.
+#[tokio::test]
+async fn test_play_page_contains_forfeit_sendbeacon() {
+    let (app, _pool) = build_test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/play/1338/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("navigator.sendBeacon('/play/forfeit')"));
+    assert!(html.contains("'pagehide'"));
+    assert!(html.contains("'beforeunload'"));
 }
 
 /// `/play/{port}/config.json` must return a JSON body with `server_port`

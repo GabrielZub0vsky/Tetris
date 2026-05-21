@@ -1066,6 +1066,22 @@ pub async fn get_play_page(Path(port): Path<u16>) -> Response {
       }}
     }});
   </script>
+  <script>
+    // Abandoning this page (back button, tab close, refresh) counts as a
+    // forfeit: the server records a Lost row for the user and removes
+    // them from the lobby. `sendBeacon` is the only reliable way to fire
+    // a POST while the page is unloading — `fetch()` would be cancelled.
+    let forfeited = false;
+    function forfeit() {{
+      if (forfeited) return;
+      forfeited = true;
+      try {{
+        navigator.sendBeacon('/play/forfeit');
+      }} catch (e) {{ /* unload race — best effort */ }}
+    }}
+    window.addEventListener('pagehide', forfeit);
+    window.addEventListener('beforeunload', forfeit);
+  </script>
 </body>
 </html>"#
     );
@@ -1086,4 +1102,59 @@ pub async fn get_play_config(Path(port): Path<u16>) -> Response {
         "replication_interval_ms": 16,
     });
     axum::Json(body).into_response()
+}
+
+/// `POST /play/forfeit` — abandon the in-progress game and take a loss.
+///
+/// Fired by `navigator.sendBeacon` from the `/play/{port}/` page when
+/// the browser's `pagehide` event triggers (back button, tab close,
+/// refresh). Looks up the user's current lobby via the session, and if
+/// the lobby is in `running` state:
+///   * inserts a `Lost` row in `game_participants` (counts as a loss)
+///   * removes the user from `lobby_members` (frees them to join again)
+///   * if they were the host or the last remaining player, the whole
+///     lobby is torn down (process killed, port released, kill reason
+///     recorded so other players see the popup)
+///
+/// Returns 204 No Content because `sendBeacon` ignores the response
+/// body. If the user isn't logged in or isn't in a running lobby this
+/// is a silent no-op so refresh-without-game doesn't blow up.
+pub async fn post_play_forfeit(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(user) = auth_session.user.as_ref() else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+
+    let lobby = match db::get_user_current_lobby(&state.pool, user.id).await {
+        Ok(Some(l)) => l,
+        _ => return StatusCode::NO_CONTENT.into_response(),
+    };
+
+    // Only count it as a forfeit if the game has actually started.
+    if lobby.status != "running" {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
+    let _ = db::record_forfeit_loss(&state.pool, user.id).await;
+    let _ = db::remove_lobby_member(&state.pool, lobby.id, user.id).await;
+    let _ = db::touch_lobby(&state.pool, lobby.id).await;
+
+    let remaining = db::get_lobby_member_count(&state.pool, lobby.id)
+        .await
+        .unwrap_or(0);
+    if remaining == 0 || lobby.host_user_id == user.id {
+        kill_lobby_process(&state.processes, lobby.id);
+        release_port(&state.port_pool, lobby.port as u16);
+        let reason = if lobby.host_user_id == user.id {
+            "host forfeited the game"
+        } else {
+            "all players forfeited the game"
+        };
+        mark_lobby_killed(&state.killed_lobbies, lobby.id, reason);
+        let _ = db::delete_lobby(&state.pool, lobby.id).await;
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }

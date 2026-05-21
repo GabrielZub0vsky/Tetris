@@ -391,12 +391,20 @@ pub fn update_hard_drop(
 
 /// Notify the player if they have won (i.e., if they are the last player
 /// remaining), only on multiplayer games.
+///
+/// Instead of immediately disconnecting the winner, this sends `WonContinue`
+/// so the client can prompt the user to either stop or keep playing solo.
+/// The winner stays connected and active until they respond via
+/// `handle_continue_choice`.
 pub fn check_winner(
     cfg: Res<GameConfig>,
     newly_dropped: Query<Entity, (With<ClientOf>, Added<ToDrop>)>,
     active_clients: Query<Entity, (With<ClientOf>, Without<ToDrop>)>,
     mut outcomes: ResMut<crate::GameOutcomes>,
-    mut commands: Commands,
+    mut awaiting: ResMut<crate::AwaitingContinue>,
+    server: Single<&Server>,
+    mut sender: ServerMultiMessageSender,
+    peer_ids: Query<&RemoteId, With<ClientOf>>,
 ) {
     if cfg.expected_players <= 1 || newly_dropped.is_empty() {
         return;
@@ -408,8 +416,66 @@ pub fn check_winner(
     }
 
     let winner = remaining[0];
+    if awaiting.winner == Some(winner) {
+        return;
+    }
+
     outcomes.outcomes.insert(winner, "Won".to_string());
-    commands.trigger(GameOver { entity: winner });
+    awaiting.winner = Some(winner);
+
+    let Ok(peer) = peer_ids.get(winner) else {
+        return;
+    };
+    info!("sending WonContinue prompt to {winner}");
+    sender
+        .send::<GameOverMessage, StateChange>(
+            &GameOverMessage::WonContinue,
+            &server,
+            &NetworkTarget::Single(peer.0),
+        )
+        .expect("Could not send the WonContinue message!");
+}
+
+/// React to the winner's continue-or-stop choice after WonContinue.
+///
+/// * ContinueNo  → trigger the normal GameOver flow (writes stats on exit,
+///   disconnects the client, tears the lobby down).
+/// * ContinueYes → write the stats immediately, mark the game finalized so
+///   the OnExit handler doesn't double-write, and let the player keep
+///   playing until they naturally lose (no more stats updates after this).
+pub fn handle_continue_choice(
+    trigger: On<ReceivedInput>,
+    mut commands: Commands,
+    mut awaiting: ResMut<crate::AwaitingContinue>,
+    mut tracking: ResMut<crate::GameTracking>,
+    outcomes: Res<crate::GameOutcomes>,
+    client_order: Res<crate::ClientOrder>,
+    db_cfg: Option<Res<crate::ServerDbConfig>>,
+) {
+    let client = trigger.target;
+    if awaiting.winner != Some(client) {
+        return;
+    }
+
+    let yes = trigger.inputs.0.contains(&Input::ContinueYes);
+    let no = trigger.inputs.0.contains(&Input::ContinueNo);
+    if !yes && !no {
+        return;
+    }
+
+    if no {
+        info!("winner {client} chose to stop — triggering GameOver");
+        awaiting.winner = None;
+        commands.trigger(GameOver { entity: client });
+        return;
+    }
+
+    info!("winner {client} chose to keep playing — finalizing stats now");
+    if let Some(db_cfg) = db_cfg.as_deref() {
+        crate::record::write_game_result_impl(db_cfg, &client_order, &outcomes, &tracking);
+    }
+    tracking.finalized = true;
+    awaiting.winner = None;
 }
 
 /// Queue the client to be disconnected for when the GameOver event is triggered.

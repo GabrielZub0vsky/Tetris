@@ -1,7 +1,11 @@
 #![allow(missing_docs)]
 
+use std::collections::HashSet;
+
 use bevy::{color::palettes::tailwind, prelude::*};
 use common::data::SharedGameState;
+use common::protocol::{Input, InputChannel, Inputs};
+use lightyear::prelude::{Client, Connected, MessageSender};
 
 pub const ELEMENT_OUTLINE: Color = Color::Srgba(tailwind::GRAY_400);
 pub const ELEMENT_FILL: Color = Color::Srgba(tailwind::PINK_500);
@@ -138,4 +142,119 @@ pub fn update_hard_drop_text(
     } else {
         "Hard Drop: Off".to_string()
     };
+}
+
+#[derive(Component)]
+pub struct WinPopup;
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum ContinueChoice {
+    Yes,
+    No,
+}
+
+pub fn spawn_win_popup(commands: &mut Commands) {
+    let root = commands
+        .spawn((
+            WinPopup,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: px(20.0),
+                left: percent(10.0),
+                right: percent(10.0),
+                padding: UiRect::all(px(14.0)),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: px(10.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
+        ))
+        .id();
+    commands.entity(root).with_children(|p| {
+        p.spawn((
+            Text("You won the battle, but would you like to continue playing?".to_string()),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::from(tailwind::PINK_300)),
+        ));
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(20.0),
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Button,
+                Node {
+                    padding: UiRect::axes(px(22.0), px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::from(tailwind::GREEN_600)),
+                ContinueChoice::Yes,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text("Yes".to_string()),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+            row.spawn((
+                Button,
+                Node {
+                    padding: UiRect::axes(px(22.0), px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::from(tailwind::RED_600)),
+                ContinueChoice::No,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text("No".to_string()),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+        });
+    });
+}
+
+/// Send the winner's continue/stop choice to the server and despawn the popup.
+pub fn handle_popup_clicks(
+    buttons: Query<(&Interaction, &ContinueChoice), Changed<Interaction>>,
+    popup: Query<Entity, With<WinPopup>>,
+    mut commands: Commands,
+    sender: Option<Single<&mut MessageSender<Inputs>, (With<Client>, With<Connected>)>>,
+) {
+    let mut clicked: Option<ContinueChoice> = None;
+    for (interaction, choice) in &buttons {
+        if matches!(interaction, Interaction::Pressed) {
+            clicked = Some(*choice);
+        }
+    }
+    let Some(choice) = clicked else {
+        return;
+    };
+    let Some(mut sender) = sender else {
+        return;
+    };
+    let input = match choice {
+        ContinueChoice::Yes => Input::ContinueYes,
+        ContinueChoice::No => Input::ContinueNo,
+    };
+    let mut inputs = Inputs(HashSet::new());
+    inputs.0.insert(input);
+    sender.send::<InputChannel>(inputs);
+    for e in &popup {
+        commands.entity(e).despawn();
+    }
 }

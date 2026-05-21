@@ -392,12 +392,11 @@ pub fn update_hard_drop(
 /// Notify the player if they have won (i.e., if they are the last player
 /// remaining), only on multiplayer games.
 pub fn check_winner(
-    mut sender: ServerMultiMessageSender,
-    server: Single<&Server>,
     cfg: Res<GameConfig>,
     newly_dropped: Query<Entity, (With<ClientOf>, Added<ToDrop>)>,
     active_clients: Query<Entity, (With<ClientOf>, Without<ToDrop>)>,
-    peer_ids: Query<&RemoteId, With<ClientOf>>,
+    mut outcomes: ResMut<crate::GameOutcomes>,
+    mut commands: Commands,
 ) {
     if cfg.expected_players <= 1 || newly_dropped.is_empty() {
         return;
@@ -409,20 +408,13 @@ pub fn check_winner(
     }
 
     let winner = remaining[0];
-    if let Ok(remote_id) = peer_ids.get(winner) {
-        sender
-            .send::<GameOverMessage, StateChange>(
-                &GameOverMessage::Won,
-                &server,
-                &NetworkTarget::Single(remote_id.0),
-            )
-            .expect("Could not send Won message");
-    }
+    outcomes.outcomes.insert(winner, "Won".to_string());
+    commands.trigger(GameOver { entity: winner });
 }
 
 /// Queue the client to be disconnected for when the GameOver event is triggered.
 ///
-/// Also, send a game lost message to the client.
+/// Sends Won or Lost based on any verdict already recorded in GameOutcomes (defaults to Lost).
 pub fn disconnect_on_game_over(
     game_over: On<GameOver>,
     server: Single<&Server>,
@@ -430,15 +422,27 @@ pub fn disconnect_on_game_over(
     peer_ids: Query<&RemoteId, With<ClientOf>>,
     mut commands: Commands,
     state: Res<State<ServerState>>,
+    mut outcomes: ResMut<crate::GameOutcomes>,
 ) {
     if *state.get() != ServerState::Running {
         return;
     }
 
-    info!("sending game over to {}", game_over.entity);
+    let verdict = outcomes
+        .outcomes
+        .entry(game_over.entity)
+        .or_insert_with(|| "Lost".to_string())
+        .clone();
+    let msg = if verdict == "Won" {
+        GameOverMessage::Won
+    } else {
+        GameOverMessage::Lost
+    };
+
+    info!("sending game over ({verdict}) to {}", game_over.entity);
     sender
         .send::<GameOverMessage, StateChange>(
-            &GameOverMessage::Lost,
+            &msg,
             &server,
             &NetworkTarget::Single(peer_ids.get(game_over.entity).unwrap().0),
         )

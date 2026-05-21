@@ -11,6 +11,7 @@ lightyear = { workspace = true, features = ["server", "crossbeam"] }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [features]
 test = ["bevy/bevy_ci_testing"]

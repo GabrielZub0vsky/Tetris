@@ -68,29 +68,15 @@
 {% endif %}
 
 <script>
-  // Poll the lobby every 2 seconds. Two outcomes redirect the user:
-  //   1. The lobby's status flips to "running" — every member is sent
-  //      to /play/{port}/ where the WASM tetris client loads and
-  //      connects to the freshly-spawned game-server on that port.
-  //   2. The lobby is destroyed (host left, all left, inactivity) —
-  //      show a popup with the reason and send the user back to /lobbies.
+  // Poll the lobby status every 3 seconds. If the lobby disappears we
+  // show a popup with the reason (e.g. inactivity) and send the user
+  // back to the lobby list.
   (function () {
     const LOBBY_ID = {{ lobby.id }};
-    const LOBBY_PORT = {{ lobby.port }};
-    const INITIAL_STATUS = "{{ lobby.status }}";
     let notified = false;
-    let redirected = false;
-
-    // If the page loaded while the lobby is already running (e.g. the
-    // user hit refresh after the game started), jump straight in.
-    if (INITIAL_STATUS === "running" && !redirected) {
-      redirected = true;
-      window.location.href = `/play/${LOBBY_PORT}/`;
-      return;
-    }
 
     async function pollLobbyStatus() {
-      if (notified || redirected) return;
+      if (notified) return;
       try {
         const res = await fetch(`/lobbies/${LOBBY_ID}/status`, {
           credentials: "same-origin",
@@ -102,18 +88,13 @@
           const reason = data.killed_reason || "the lobby ended";
           alert(`This lobby has been killed: ${reason}. You will be returned to the lobby list.`);
           window.location.href = "/lobbies";
-          return;
-        }
-        if (data.status === "running") {
-          redirected = true;
-          window.location.href = `/play/${LOBBY_PORT}/`;
         }
       } catch (e) {
         /* network blip — keep polling */
       }
     }
 
-    setInterval(pollLobbyStatus, 2000);
+    setInterval(pollLobbyStatus, 3000);
   })();
 </script>
 {% endblock %}

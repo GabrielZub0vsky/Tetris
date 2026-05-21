@@ -19,6 +19,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tower-sessions.workspace = true
 tower-sessions-sqlx-store.workspace = true
+tower-http = { version = "0.6", features = ["fs"] }
 
 [dev-dependencies]
 tower.workspace = true

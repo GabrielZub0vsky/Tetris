@@ -711,10 +711,14 @@ pub async fn post_create_lobby(
     };
     let _ = db::add_lobby_member(&state.pool, lobby_id, user.id).await;
 
-    // For a 1-player lobby this fills immediately and spawns the game
-    // server right away. Multi-player lobbies stay `waiting` until the
-    // remaining joiners arrive (handled by post_join_lobby).
-    start_game_if_full(&state, lobby_id, form.max_players).await;
+    let new_count = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(0);
+    if new_count >= form.max_players {
+        let _ = db::set_lobby_status(&state.pool, lobby_id, "running").await;
+    }
+
+    spawn_game_server(&state, lobby_id, port, form.max_players).await;
 
     Redirect::to(&format!("/lobbies/{lobby_id}")).into_response()
 }
@@ -825,9 +829,12 @@ pub async fn post_join_lobby(
     let _ = db::add_lobby_member(&state.pool, lobby_id, user.id).await;
     let _ = db::touch_lobby(&state.pool, lobby_id).await;
 
-    // If this join filled the lobby, flip to running AND spawn the game
-    // server. Otherwise the lobby stays waiting for the next joiner.
-    start_game_if_full(&state, lobby_id, lobby.max_players).await;
+    let new_count = db::get_lobby_member_count(&state.pool, lobby_id)
+        .await
+        .unwrap_or(0);
+    if new_count >= lobby.max_players {
+        let _ = db::set_lobby_status(&state.pool, lobby_id, "running").await;
+    }
 
     Redirect::to(&format!("/lobbies/{lobby_id}")).into_response()
 }
@@ -899,20 +906,16 @@ pub async fn get_lobby_status(
     // background task just for this map.
     prune_killed(&state.killed_lobbies);
 
-    let lobby_row = db::get_lobby(&state.pool, lobby_id).await.ok().flatten();
+    let lobby_exists = matches!(db::get_lobby(&state.pool, lobby_id).await, Ok(Some(_)));
     let killed = lookup_killed(&state.killed_lobbies, lobby_id);
 
     // Lobby is alive when the row still exists AND we haven't recorded
     // a kill for it. A row plus a kill entry shouldn't happen, but if
     // it does we trust the kill marker (DB is eventually consistent
     // with the cleanup task).
-    let alive = lobby_row.is_some() && killed.is_none();
-    let status = lobby_row.as_ref().map(|l| l.status.clone());
-    let port = lobby_row.as_ref().map(|l| l.port);
+    let alive = lobby_exists && killed.is_none();
     let body = serde_json::json!({
         "alive": alive,
-        "status": status,
-        "port": port,
         "killed_reason": killed.map(|k| k.reason),
     });
     axum::Json(body).into_response()
@@ -945,23 +948,13 @@ async fn render_lobbies_error(state: &AppState, current_user: &str, error: &str)
 }
 
 /// Spawn a game-server child process for the given lobby and store its handle.
-///
-/// Reads the appropriate template from `static/config-{N}.json`, injects the
-/// per-lobby `server_port`, `player_ids`, and `db_path`, writes the derived
-/// config to `/tmp/lobby_{id}.json`, and forks
-/// `./run-game-server.sh -c /tmp/lobby_{id}.json`.
-///
-/// We can't just point the script at `static/config-N.json` directly because
-/// every running lobby needs a different port (the static templates ship with
-/// port 1337) and needs its `player_ids` array set so the game server can
-/// attribute outcomes correctly when it writes back to SQLite.
 pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_players: i64) {
-    let template = match max_players {
-        2 => "static/config-2.json",
-        3 => "static/config-3.json",
-        _ => "static/config.json",
+    let base_config = match max_players {
+        2 => "config-2.json",
+        3 => "config-3.json",
+        _ => "config.json",
     };
-    let config_str = match std::fs::read_to_string(template) {
+    let config_str = match std::fs::read_to_string(base_config) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -983,13 +976,9 @@ pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_p
         return;
     }
 
-    // Use the user-facing run-game-server.sh wrapper so behavior matches
-    // what a developer would see invoking the script directly from the
-    // command line. The script `cd`s into server/ and runs cargo, so the
-    // -c argument needs to be an absolute path.
     let result = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("./run-game-server.sh")
-            .arg("-c")
+        std::process::Command::new("./target/debug/server")
+            .arg("--config")
             .arg(&config_path)
             .spawn()
     })
@@ -1003,158 +992,4 @@ pub async fn spawn_game_server(state: &AppState, lobby_id: i64, port: i64, max_p
             let _ = db::set_lobby_pid(&pool, lobby_id, pid).await;
         });
     }
-}
-
-/// Mark the lobby as `running` and spawn its game server, but only if the
-/// lobby just hit its `max_players` cap. Idempotent: callable from both
-/// the create-lobby path (max_players=1 fills immediately) and the
-/// join-lobby path (filled by the last joiner). Always touches
-/// `last_activity` so the stale-lobby cleanup doesn't kill the game
-/// the second it starts.
-pub async fn start_game_if_full(state: &AppState, lobby_id: i64, max_players: i64) {
-    let count = db::get_lobby_member_count(&state.pool, lobby_id)
-        .await
-        .unwrap_or(0);
-    if count < max_players {
-        return;
-    }
-    // Only flip waiting → running once. If already running we skip
-    // (defensive — caller usually checks too).
-    let Ok(Some(lobby)) = db::get_lobby(&state.pool, lobby_id).await else {
-        return;
-    };
-    if lobby.status != "waiting" {
-        return;
-    }
-    let _ = db::set_lobby_status(&state.pool, lobby_id, "running").await;
-    let _ = db::touch_lobby(&state.pool, lobby_id).await;
-    spawn_game_server(state, lobby_id, lobby.port, max_players).await;
-}
-
-// ── Play (game-client) pages ─────────────────────────────────────────────────
-
-/// `GET /play/{port}/` — serve the HTML page that boots the WASM tetris
-/// client and points it at the game-server on the given port.
-///
-/// Each lobby member is auto-redirected here once the lobby flips to
-/// `running` (see lobby_detail.html JS). The page references the WASM
-/// bundle at the absolute path `/static/client.js` (served via
-/// tower-http's ServeDir) and fetches its game config from
-/// `./config.json`, which resolves to `/play/{port}/config.json`.
-pub async fn get_play_page(Path(port): Path<u16>) -> Response {
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Tetris (port {port})</title>
-  <style>
-    body {{
-      color: white; background-color: black; font-family: monospace;
-      display: flex; justify-content: center; align-items: center;
-      height: 100vh; margin: 0;
-    }}
-  </style>
-</head>
-<body style="margin:0">
-  <canvas id="canvas" width="600" height="600"></canvas>
-  <script type="module">
-    import init from '/static/client.js';
-    init().catch((err) => {{
-      if (!String(err.message || '').startsWith("Using exceptions for control flow")) {{
-        throw err;
-      }}
-    }});
-  </script>
-  <script>
-    // Abandoning this page (back button, tab close, refresh) counts as a
-    // forfeit: the server records a Lost row for the user and removes
-    // them from the lobby. `sendBeacon` is the only reliable way to fire
-    // a POST while the page is unloading — `fetch()` would be cancelled.
-    let forfeited = false;
-    function forfeit() {{
-      if (forfeited) return;
-      forfeited = true;
-      try {{
-        navigator.sendBeacon('/play/forfeit');
-      }} catch (e) {{ /* unload race — best effort */ }}
-    }}
-    window.addEventListener('pagehide', forfeit);
-    window.addEventListener('beforeunload', forfeit);
-  </script>
-</body>
-</html>"#
-    );
-    Html(html).into_response()
-}
-
-/// `GET /play/{port}/config.json` — return a fresh game-client config
-/// JSON whose `server_port` is set to the lobby's port. The WASM client
-/// fetches this on startup (`get_web_resource("config.json")` resolves
-/// relative to the document URL = `/play/{port}/`) so it connects to
-/// the right game-server.
-pub async fn get_play_config(Path(port): Path<u16>) -> Response {
-    let body = serde_json::json!({
-        "bag": "RandomSeed",
-        "animate_title": true,
-        "server_addr": "127.0.0.1",
-        "server_port": port,
-        "replication_interval_ms": 16,
-    });
-    axum::Json(body).into_response()
-}
-
-/// `POST /play/forfeit` — abandon the in-progress game and take a loss.
-///
-/// Fired by `navigator.sendBeacon` from the `/play/{port}/` page when
-/// the browser's `pagehide` event triggers (back button, tab close,
-/// refresh). Looks up the user's current lobby via the session, and if
-/// the lobby is in `running` state:
-///   * inserts a `Lost` row in `game_participants` (counts as a loss)
-///   * removes the user from `lobby_members` (frees them to join again)
-///   * if they were the host or the last remaining player, the whole
-///     lobby is torn down (process killed, port released, kill reason
-///     recorded so other players see the popup)
-///
-/// Returns 204 No Content because `sendBeacon` ignores the response
-/// body. If the user isn't logged in or isn't in a running lobby this
-/// is a silent no-op so refresh-without-game doesn't blow up.
-pub async fn post_play_forfeit(
-    auth_session: AuthSession,
-    State(state): State<AppState>,
-) -> Response {
-    let Some(user) = auth_session.user.as_ref() else {
-        return StatusCode::NO_CONTENT.into_response();
-    };
-
-    let lobby = match db::get_user_current_lobby(&state.pool, user.id).await {
-        Ok(Some(l)) => l,
-        _ => return StatusCode::NO_CONTENT.into_response(),
-    };
-
-    // Only count it as a forfeit if the game has actually started.
-    if lobby.status != "running" {
-        return StatusCode::NO_CONTENT.into_response();
-    }
-
-    let _ = db::record_forfeit_loss(&state.pool, user.id).await;
-    let _ = db::remove_lobby_member(&state.pool, lobby.id, user.id).await;
-    let _ = db::touch_lobby(&state.pool, lobby.id).await;
-
-    let remaining = db::get_lobby_member_count(&state.pool, lobby.id)
-        .await
-        .unwrap_or(0);
-    if remaining == 0 || lobby.host_user_id == user.id {
-        kill_lobby_process(&state.processes, lobby.id);
-        release_port(&state.port_pool, lobby.port as u16);
-        let reason = if lobby.host_user_id == user.id {
-            "host forfeited the game"
-        } else {
-            "all players forfeited the game"
-        };
-        mark_lobby_killed(&state.killed_lobbies, lobby.id, reason);
-        let _ = db::delete_lobby(&state.pool, lobby.id).await;
-    }
-
-    StatusCode::NO_CONTENT.into_response()
 }

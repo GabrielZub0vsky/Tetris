@@ -9,57 +9,21 @@ While working on this assignment, you will:
 2. Handle different authentication schemes (password, tokens).
 3. Use coding agents (optional).
 
-You need to _pass_ this assignment in order to qualify for an A- or above.
-
-## Deadline: May 19
-
-- This is the last day for you to **pass all code reviews** and schedule an
-  interactive grading session.
-- I will have less availability for interactive grading during finals week.
-
-## Setup and testing
-
-You need to figure these out, and writing tests is a general concern for this
-assignment that you need to address.
-
 ## Directory structure
 
-Same as milestone 2.
-
-```
 .
 ├── Cargo.lock
 ├── Cargo.toml
 ├── CODEOWNERS
 ├── deploy-client.sh   -- deploys the client to static/
 ├── README.md
-├── run-game-server.sh -- runs a game server, you shouldn't need this except for some local debugging.
+├── run-game-server.sh -- runs a game server
 ├── run-web-server.sh  -- runs YOUR web server
 ├── static             -- where static content (e.g. the wasm files) should go
 │   └── index.html     -- included as an example page that wraps the wasm file
 ├── templates/         -- where the templates should go, contains an empty file for Git
 └── web-server/        -- this is just an empty Rust project with the right dependencies
 ```
-
-## Starting the assignment
-
-You should copy the `server`, `common`, `client` directories from milestone 3,
-and register them in `Cargo.toml`.  Then, you should be ready to do the
-assignment.
-
-After you check in this code, request a code review from me, and I will approve
-it ASAP to let you move on to the actual code reviews.
-
-## CI
-
-There is no CI setup for this assignment, building a CI counts as a feature.
-
-## What you need to implement
-
-Features 1--2 are required.  You get to choose among other features (see the
-grading section).
-
-You should create **one PR per feature**.
 
 ### Feature 1: Add a user system
 
